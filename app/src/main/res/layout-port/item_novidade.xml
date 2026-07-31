@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:layout_marginBottom="28dp">
+
+    <!-- Imagem de fundo do conteúdo -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="220dp"
+        android:layout_marginHorizontal="14dp">
+
+        <ImageView
+            android:id="@+id/imgFundoNovidade"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="centerCrop"/>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/gradient_card_scrim"/>
+
+        <View android:id="@+id/btnPlayTrailer"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:visibility="gone"/>
+
+    </FrameLayout>
+
+    <!-- Logo do título (TMDB) — altura FIXA para não causar re-medição -->
+    <ImageView
+        android:id="@+id/imgLogoNovidade"
+        android:layout_width="200dp"
+        android:layout_height="64dp"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="12dp"
+        android:scaleType="fitStart"
+        android:visibility="gone"/>
+
+    <!-- Título texto (fallback) -->
+    <TextView
+        android:id="@+id/tvTituloNovidade"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="12dp"
+        android:textColor="#FFFFFF"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:fontFamily="sans-serif-condensed"
+        android:ellipsize="end"
+        android:maxLines="2"/>
+
+    <!-- Tag (data de estreia ou posição Top 10) -->
+    <TextView
+        android:id="@+id/tvTagline"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="4dp"
+        android:textColor="#E50914"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.05"/>
+
+    <!-- Sinopse — altura fixa para evitar re-layout de texto -->
+    <TextView
+        android:id="@+id/tvSinopseNovidade"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="8dp"
+        android:maxLines="3"
+        android:ellipsize="end"
+        android:textColor="#CCCCCC"
+        android:textSize="13sp"/>
+
+    <!-- Mensagem quando não disponível no servidor -->
+    <TextView
+        android:id="@+id/tvMensagemDisponibilidade"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="6dp"
+        android:textColor="#88FFFFFF"
+        android:textSize="11sp"
+        android:visibility="gone"/>
+
+    <!-- Botões de ação -->
+    <LinearLayout
+        android:id="@+id/containerBotoesAtivos"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="14dp"
+        android:orientation="horizontal"
+        android:weightSum="2">
+
+        <LinearLayout
+            android:id="@+id/btnAssistirNovidade"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginEnd="6dp"
+            android:background="#FFFFFF"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true"
+            android:visibility="gone">
+
+            <ImageView
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:src="@android:drawable/ic_media_play"
+                app:tint="#000000"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ASSISTIR"
+                android:textColor="#000000"
+                android:textStyle="bold"
+                android:textSize="12sp"
+                android:letterSpacing="0.05"
+                android:layout_marginStart="6dp"/>
+
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/btnMinhaListaNovidade"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:background="@drawable/bg_btn_detalhes"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:layout_width="15dp"
+                android:layout_height="15dp"
+                android:src="@android:drawable/ic_menu_info_details"
+                app:tint="#FFFFFF"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="DETALHES"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:textSize="12sp"
+                android:letterSpacing="0.05"
+                android:layout_marginStart="6dp"/>
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <View android:id="@+id/tvNumeroTop10"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"/>
+    <View android:id="@+id/containerBotaoAviso"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"/>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="20dp"
+        android:background="#1AFFFFFF"/>
+
+</LinearLayout>

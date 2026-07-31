@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="retro_games_empty">Nenhum jogo disponível no momento.</string>
+    <string name="retro_games_tab_title">Jogos Retrô</string>
+</resources>
