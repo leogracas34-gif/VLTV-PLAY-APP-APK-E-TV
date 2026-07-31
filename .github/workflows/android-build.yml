@@ -1,0 +1,42 @@
+name: Android Build
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Setup Gradle
+      uses: gradle/gradle-build-action@v2
+      with:
+        gradle-version: '8.9'
+
+    # ✅ CORRIGIDO: adicionado "clean" antes do "assembleDebug".
+    # O cache do Gradle (dependências) continua sendo reaproveitado
+    # normalmente — isso só apaga os arquivos INTERMEDIÁRIOS do seu
+    # projeto (pasta app/build/), incluindo o R.java gerado a partir
+    # dos recursos (layouts, strings, drawables). Sem isso, quando um
+    # layout novo era adicionado, às vezes o build reaproveitava um
+    # R.java antigo (de antes do arquivo existir), causando erros como
+    # "Resources$NotFoundException: Resource ID #0x..." em tempo de
+    # execução, mesmo com o arquivo certinho no repositório.
+    - name: Build with Gradle
+      run: gradle clean assembleDebug --stacktrace
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-debug
+        path: app/build/outputs/apk/debug/app-debug.apk
