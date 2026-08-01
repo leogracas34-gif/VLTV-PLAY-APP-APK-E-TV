@@ -46,12 +46,16 @@ import com.vltv.play.data.SeriesEntity
 import com.vltv.play.retro.RetroGamesActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.URL
 import java.net.URLEncoder
+import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
 import com.google.firebase.Firebase
@@ -106,6 +110,20 @@ class HomeActivity : AppCompatActivity() {
     private var gameRotationIndex = 0
     private var gameRotationFetchJob: kotlinx.coroutines.Job? = null
     private val GAME_ROTATION_INTERVALO_MS = 6000L
+
+    // ✅ OTIMIZAÇÃO (banner de jogos / destaque):
+    // Antes, TODA vez que a Home passava por onResume() -> setupFirebaseRemoteConfig(),
+    // os escudos dos times e a imagem de fundo do confronto eram baixados/gerados de
+    // novo do zero, mesmo que os jogos do dia fossem exatamente os mesmos de antes.
+    // Isso competia por rede com o carregamento dos pôsteres de filmes/séries e fazia
+    // a Home "demorar pra popular" sempre que o banner de jogos estava ativo no
+    // Remote Config. Os campos abaixo guardam o que já foi resolvido nesta sessão
+    // pra pular esse trabalho quando os dados não mudaram.
+    private val escudoBitmapCache = mutableMapOf<String, Bitmap?>()
+    private val confrontoBitmapCache = mutableMapOf<String, Bitmap?>()
+    private var ultimoGamesJsonAplicado: String? = null
+    private var ultimoFeaturedTitleAplicado: String? = null
+    private var featuredBannerEncontrado = false
 
     private data class BannerAssets(
         val backdropUrl: String?,
@@ -1134,18 +1152,26 @@ class HomeActivity : AppCompatActivity() {
         } catch (e: Exception) { null }
     }
 
+    // ✅ OTIMIZAÇÃO: cache em memória (escudoBitmapCache) evita baixar o
+    // mesmo escudo de novo em toda rotação/onResume — o brasão de um time
+    // não muda de imagem de um resume pro outro. Também aplicamos um
+    // timeout de 4s no Glide.get() pra uma imagem lenta/travada não segurar
+    // o carregamento do card de jogo indefinidamente.
     private suspend fun buscarEscudoBitmap(nomeTime: String, tamanhoPx: Int): Bitmap? {
         if (nomeTime.isBlank()) return null
+        escudoBitmapCache[nomeTime]?.let { return it }
         return try {
             val badgeUrl = EscudoHelper.buscarEscudoUrl(nomeTime) ?: return null
-            withContext(Dispatchers.IO) {
+            val bitmap = withContext(Dispatchers.IO) {
                 Glide.with(applicationContext)
                     .asBitmap()
                     .load(badgeUrl)
                     .diskCacheStrategy(DiskCacheStrategy.ALL)
                     .submit(tamanhoPx, tamanhoPx)
-                    .get()
+                    .get(4, TimeUnit.SECONDS)
             }
+            escudoBitmapCache[nomeTime] = bitmap
+            bitmap
         } catch (e: Exception) { null }
     }
 
@@ -1179,6 +1205,13 @@ class HomeActivity : AppCompatActivity() {
         return sb
     }
 
+    // ✅ OTIMIZAÇÃO: a checagem do Remote Config agora é adiada em ~400ms
+    // no onResume() (veja override abaixo) pra não competir por rede com
+    // o carregamento inicial dos pôsteres de filmes/séries. O corpo desta
+    // função continua igual — o ganho de performance vem principalmente
+    // do cache em aplicarGameBannerRotacao()/aplicarFeaturedBanner() logo
+    // abaixo, que evita refazer todo o trabalho pesado quando os dados
+    // não mudaram desde a última vez.
     private fun setupFirebaseRemoteConfig() {
         val remoteConfig = Firebase.remoteConfig
         remoteConfig.setDefaultsAsync(mapOf(
@@ -1285,6 +1318,22 @@ class HomeActivity : AppCompatActivity() {
         if (!show) {
             card.visibility = View.GONE
             pararRotacaoJogos()
+            ultimoGamesJsonAplicado = null
+            return
+        }
+
+        // ✅ OTIMIZAÇÃO PRINCIPAL: se os jogos de hoje são exatamente os
+        // mesmos da última vez que essa tela foi montada (mesmo JSON vindo
+        // do Remote Config), não tem motivo pra baixar os escudos e gerar
+        // a imagem de fundo do confronto de novo — isso só consome rede e
+        // tempo à toa em TODO onResume(), e é a causa principal da Home
+        // demorar pra popular quando o banner de jogos está ativo. Só
+        // reaplicamos a rotação já pronta.
+        if (gamesJson == ultimoGamesJsonAplicado && gameRotationList.isNotEmpty()) {
+            card.visibility = View.VISIBLE
+            if (gameRotationIndex !in gameRotationList.indices) gameRotationIndex = 0
+            mostrarJogoRotacao(gameRotationIndex)
+            iniciarRotacaoJogos()
             return
         }
 
@@ -1313,22 +1362,40 @@ class HomeActivity : AppCompatActivity() {
                 }
 
                 val tamanhoPx = 28.dp
-                val prontos = jogos.map { info ->
-                    val casa = try { buscarEscudoBitmap(info.team_home, tamanhoPx) } catch (e: Exception) { null }
-                    val fora = try { buscarEscudoBitmap(info.team_away, tamanhoPx) } catch (e: Exception) { null }
-                    val fundo = if (info.image_url.isBlank()) {
-                        // Não veio image_url no JSON: monta o fundo do confronto
-                        // automaticamente (degradê + escudos) via ConfrontoImageHelper.
-                        try {
-                            ConfrontoImageHelper.gerarImagemFundo(info.team_home, info.team_away)
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                            null
+
+                // ✅ OTIMIZAÇÃO: escudos/fundos de TODOS os jogos são
+                // buscados em PARALELO agora (antes era sequencial — um
+                // jogo esperava o escudo do outro terminar de baixar antes
+                // de começar o próximo, o que multiplicava o tempo total
+                // pelo número de jogos do dia).
+                val prontos = coroutineScope {
+                    jogos.map { info ->
+                        async {
+                            val casa = try { buscarEscudoBitmap(info.team_home, tamanhoPx) } catch (e: Exception) { null }
+                            val fora = try { buscarEscudoBitmap(info.team_away, tamanhoPx) } catch (e: Exception) { null }
+                            val fundo = if (info.image_url.isBlank()) {
+                                // Não veio image_url no JSON: monta o fundo do confronto
+                                // automaticamente (degradê + escudos) via ConfrontoImageHelper.
+                                // Também cacheado por par de times pra não regerar à toa.
+                                val chaveFundo = "${info.team_home}|${info.team_away}"
+                                if (confrontoBitmapCache.containsKey(chaveFundo)) {
+                                    confrontoBitmapCache[chaveFundo]
+                                } else {
+                                    val gerado = try {
+                                        ConfrontoImageHelper.gerarImagemFundo(info.team_home, info.team_away)
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                        null
+                                    }
+                                    confrontoBitmapCache[chaveFundo] = gerado
+                                    gerado
+                                }
+                            } else {
+                                null
+                            }
+                            GameDisplayReady(info, casa, fora, fundo)
                         }
-                    } else {
-                        null
-                    }
-                    GameDisplayReady(info, casa, fora, fundo)
+                    }.awaitAll()
                 }
 
                 withContext(Dispatchers.Main) {
@@ -1339,6 +1406,7 @@ class HomeActivity : AppCompatActivity() {
                     gameRotationIndex = 0
                     mostrarJogoRotacao(0)
                     iniciarRotacaoJogos()
+                    ultimoGamesJsonAplicado = gamesJson
 
                     card.setOnClickListener {
                         val intent = Intent(this@HomeActivity, LiveTvActivity::class.java)
@@ -1460,7 +1528,12 @@ class HomeActivity : AppCompatActivity() {
         val isSeriesRC  = remoteConfig.getBoolean("featured_is_series")
 
         val card = binding.cardFeaturedBanner ?: return
-        if (!show || title.isBlank()) { card.visibility = View.GONE; return }
+        if (!show || title.isBlank()) {
+            card.visibility = View.GONE
+            ultimoFeaturedTitleAplicado = null
+            featuredBannerEncontrado = false
+            return
+        }
 
         card.findViewById<TextView>(R.id.tvFeaturedTitle).text = title
 
@@ -1481,6 +1554,16 @@ class HomeActivity : AppCompatActivity() {
         }
 
         card.visibility = View.VISIBLE
+
+        // ✅ OTIMIZAÇÃO: se o título em destaque não mudou desde a última
+        // vez e já tínhamos encontrado o item correspondente no banco, não
+        // repete a busca (que envolve consultas LIKE, potencialmente
+        // full-table-scan) a cada onResume(). Os cliques continuam
+        // funcionando normalmente pois os listeners já foram configurados
+        // na resolução anterior nesta mesma Activity.
+        if (title == ultimoFeaturedTitleAplicado && featuredBannerEncontrado) {
+            return
+        }
 
         buscarIdFeaturedBanner(card, title, isSeriesRC)
         if (!ContentRepository.pronto) {
@@ -1534,6 +1617,8 @@ class HomeActivity : AppCompatActivity() {
                     }
 
                     card.visibility = View.VISIBLE
+                    ultimoFeaturedTitleAplicado = title
+                    featuredBannerEncontrado = true
 
                     val launchDetail: () -> Unit = {
                         val intent = if (isSeriesRC)
@@ -1563,7 +1648,19 @@ class HomeActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         try {
-            setupFirebaseRemoteConfig()
+            // ✅ OTIMIZAÇÃO: a checagem do Remote Config (banner de jogos e
+            // banner em destaque) é adiada em ~400ms aqui, pra não competir
+            // por rede com o carregamento inicial dos pôsteres de
+            // filmes/séries que acontece assim que a Home abre/volta ao
+            // primeiro plano. Combinado com o cache em
+            // aplicarGameBannerRotacao()/aplicarFeaturedBanner() acima, a
+            // Home volta a popular rápido mesmo com os banners ativos.
+            lifecycleScope.launch(Dispatchers.Main) {
+                delay(400)
+                if (!isFinishing && !isDestroyed) {
+                    setupFirebaseRemoteConfig()
+                }
+            }
 
             val prefs = getSharedPreferences("vltv_prefs", Context.MODE_PRIVATE)
             currentProfile = prefs.getString("last_profile_name", currentProfile) ?: "Padrao"
