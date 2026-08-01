@@ -53,7 +53,7 @@ class SettingsActivity : AppCompatActivity() {
     private val tmdbApiKey = "9b73f5dd15b8165b1b57419be2f29128"
 
     // ✅ Links oficiais exibidos na tela "Sobre o Aplicativo"
-    private val SITE_URL = "https://vltv.onrender.com"
+    private val SITE_URL = "https://vltvplay.tech"
     private val INSTAGRAM_USERNAME = "vltv_play"
 
     // Views do card de plano
