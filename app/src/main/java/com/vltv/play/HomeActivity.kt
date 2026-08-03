@@ -139,6 +139,10 @@ class HomeActivity : AppCompatActivity() {
     private var popularSectionsJob: kotlinx.coroutines.Job? = null
     private var popularSectionsPendente: Triple<List<VodItem>, List<VodEntity>, List<SeriesEntity>>? = null
 
+    // ✅ NOVO: evita checar atualização mais de uma vez por sessão da Activity
+    // (onCreate roda uma vez só, então isso é mais por clareza/segurança).
+    private var verificacaoAtualizacaoFeita = false
+
     companion object {
         private val REGEX_EXIBICAO_TAGS = Regex("(?i)\\b(4K|FULL\\.?HD|HD|SD|720P|1080P|2160P|DUBLADO|LEGENDADO|DUAL|AUDIO|LATINO|PT[-.]?BR|PTBR|WEB[-.]?DL|BLURAY|MKV|MP4|AVI|REPACK|H\\.?264|H\\.?265|HEVC|WEB|HDR|UHD|FHD|CINEMA|LAN[ÇC]AMENTO|EXCLUSIVO)\\b")
         private val REGEX_EXIBICAO_BRACKETS = Regex("\\(\\d{4}\\)|\\[.*?\\]|\\{.*?\\}")
@@ -238,9 +242,70 @@ class HomeActivity : AppCompatActivity() {
                 }
             }
 
+            verificarAtualizacaoApp()
+
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    /**
+     * ✅ NOVO: SISTEMA DE AUTOATUALIZAÇÃO (fora da Play Store)
+     *
+     * Busca https://cdn.vltvplay.tech/update/version.json em background.
+     * Se o "versionCode" de lá for maior que o BuildConfig.VERSION_CODE
+     * instalado, mostra um diálogo oferecendo pra baixar e instalar a
+     * nova versão. Ver AppUpdateManager.kt para o fluxo completo
+     * (download via DownloadManager + instalação via FileProvider).
+     *
+     * Roda só uma vez por abertura da Home (onCreate), pra não ficar
+     * batendo na VPS a cada onResume().
+     */
+    private fun verificarAtualizacaoApp() {
+        if (verificacaoAtualizacaoFeita) return
+        verificacaoAtualizacaoFeita = true
+
+        lifecycleScope.launch {
+            try {
+                val resultado = AppUpdateManager.checarAtualizacao(applicationContext)
+                if (!isFinishing && !isDestroyed &&
+                    resultado is AppUpdateManager.CheckResult.UpdateDisponivel) {
+                    mostrarDialogoAtualizacao(resultado.info)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    private fun mostrarDialogoAtualizacao(info: AppUpdateManager.UpdateInfo) {
+        val builder = AlertDialog.Builder(this)
+            .setTitle("Nova versão disponível: ${info.versionName}")
+            .setMessage(
+                info.changelog.ifBlank { "Uma nova atualização do VLTV Play está disponível." }
+            )
+            .setPositiveButton("Atualizar agora") { _, _ ->
+                if (AppUpdateManager.podeInstalarApks(this)) {
+                    AppUpdateManager.iniciarDownload(this, info)
+                    Toast.makeText(this, "Baixando atualização...", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(
+                        this,
+                        "Ative a permissão de instalação para continuar a atualização",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    AppUpdateManager.abrirTelaPermissaoInstalacao(this)
+                }
+            }
+
+        if (!info.obrigatorio) {
+            builder.setNegativeButton("Depois", null)
+            builder.setCancelable(true)
+        } else {
+            builder.setCancelable(false)
+        }
+
+        builder.show()
     }
 
     private fun adicionarWordmarkVLTV() {
