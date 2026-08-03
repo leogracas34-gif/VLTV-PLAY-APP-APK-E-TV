@@ -8,7 +8,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
-import android.widget.Toast
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -20,18 +19,21 @@ import java.net.URL
 /**
  * Sistema de autoatualização do app fora da Play Store.
  *
- * ⚠️ VERSÃO TEMPORÁRIA DE DEBUG: adicionamos logs via Toast/Log dentro de
- * checarAtualizacao() pra descobrir por que a checagem estava falhando
- * silenciosamente (o catch genérico engolia a exceção sem avisar nada na
- * tela). Depois de resolver o problema, dá pra remover os Toasts e deixar
- * só o Log.d (ou tirar tudo, se preferir voltar pra versão limpa).
- *
  * FLUXO:
  * 1. checarAtualizacao() busca https://cdn.vltvplay.tech/update/version.json na VPS
  * 2. Compara o "versionCode" remoto com o BuildConfig.VERSION_CODE instalado
  * 3. Se houver versão nova, retorna um UpdateInfo pra Activity mostrar o diálogo
  * 4. Ao usuário confirmar, iniciarDownload() baixa o APK via DownloadManager do Android
- * 5. Quando o download termina, o DownloadCompleteReceiver dispara instalarApkBaixado()
+ * 5. Quando o download termina, o DownloadCompleteReceiver dispara instalarApkBaixado(),
+ *    que abre a tela nativa de instalação (exige confirmação manual do usuário —
+ *    é limitação do próprio Android, não dá pra instalar 100% silencioso sem
+ *    o app ser "device owner"/MDM).
+ *
+ * IMPORTANTE: pra atualização instalar por cima de uma versão já instalada, o
+ * APK novo precisa ser assinado com a MESMA chave da versão anterior. Por isso
+ * o projeto usa uma keystore de debug fixa (debug.keystore na raiz do repo,
+ * referenciada em app/build.gradle) em vez da keystore aleatória que o
+ * GitHub Actions geraria por padrão a cada build.
  */
 object AppUpdateManager {
 
@@ -39,7 +41,6 @@ object AppUpdateManager {
     private const val PREFS_NAME = "vltv_update_prefs"
     private const val KEY_DOWNLOAD_ID = "download_id"
     private const val KEY_APK_FILENAME = "apk_filename"
-    private const val TAG = "VLTV_AppUpdate"
 
     data class UpdateInfo(
         val versionCode: Int,
@@ -57,15 +58,9 @@ object AppUpdateManager {
     /**
      * Busca o version.json na VPS e compara com a versão instalada.
      * Chamar sempre em background (já usa Dispatchers.IO internamente).
-     *
-     * ⚠️ debug=true faz essa função mostrar um Toast na tela contando
-     * exatamente o que aconteceu (sucesso, erro de rede, JSON inválido etc.)
-     * — útil pra diagnosticar direto no celular, sem precisar de logcat.
      */
-    suspend fun checarAtualizacao(context: Context, debug: Boolean = false): CheckResult = withContext(Dispatchers.IO) {
+    suspend fun checarAtualizacao(context: Context): CheckResult = withContext(Dispatchers.IO) {
         try {
-            android.util.Log.d(TAG, "Buscando $VERSION_JSON_URL ...")
-
             val conn = (URL(VERSION_JSON_URL).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 8000
                 readTimeout = 8000
@@ -73,19 +68,12 @@ object AppUpdateManager {
                 setRequestProperty("User-Agent", "VLTVPlay-Android")
             }
 
-            val responseCode = conn.responseCode
-            android.util.Log.d(TAG, "responseCode=$responseCode")
-
-            if (responseCode !in 200..299) {
-                val erroMsg = "HTTP $responseCode ao buscar version.json"
-                android.util.Log.w(TAG, erroMsg)
-                if (debug) mostrarToastDebug(context, erroMsg)
+            if (conn.responseCode !in 200..299) {
                 return@withContext CheckResult.AtualizadoOuFalha
             }
 
             val body = conn.inputStream.bufferedReader().use { it.readText() }
             conn.disconnect()
-            android.util.Log.d(TAG, "Body recebido: $body")
 
             val json = JSONObject(body)
             val versionCodeRemoto = json.optInt("versionCode", -1)
@@ -96,10 +84,6 @@ object AppUpdateManager {
 
             val versionCodeAtual = BuildConfig.VERSION_CODE
 
-            val resumo = "Instalado: $versionCodeAtual | Remoto: $versionCodeRemoto | apkUrl='$apkUrl'"
-            android.util.Log.d(TAG, resumo)
-            if (debug) mostrarToastDebug(context, resumo)
-
             if (versionCodeRemoto > versionCodeAtual && apkUrl.isNotBlank()) {
                 CheckResult.UpdateDisponivel(
                     UpdateInfo(versionCodeRemoto, versionName, apkUrl, changelog, obrigatorio)
@@ -108,15 +92,9 @@ object AppUpdateManager {
                 CheckResult.AtualizadoOuFalha
             }
         } catch (e: Exception) {
-            val erroMsg = "Falha ao checar atualização: ${e.javaClass.simpleName} - ${e.message}"
-            android.util.Log.e(TAG, erroMsg, e)
-            if (debug) mostrarToastDebug(context, erroMsg)
+            e.printStackTrace()
             CheckResult.AtualizadoOuFalha
         }
-    }
-
-    private suspend fun mostrarToastDebug(context: Context, mensagem: String) = withContext(Dispatchers.Main) {
-        Toast.makeText(context, "[DEBUG UPDATE] $mensagem", Toast.LENGTH_LONG).show()
     }
 
     /**
