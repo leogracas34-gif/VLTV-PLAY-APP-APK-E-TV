@@ -23,6 +23,13 @@ jobs:
       with:
         gradle-version: '9.5.1'
 
+    # ✅ NOVO: recria o debug.keystore na raiz do repo a partir do Secret
+    # DEBUG_KEYSTORE_BASE64 (Settings > Secrets and variables > Actions).
+    # O keystore nunca fica commitado no repositório — só existe durante
+    # esta execução do build, dentro do runner do Actions.
+    - name: Recriar debug.keystore a partir do Secret
+      run: echo "${{ secrets.DEBUG_KEYSTORE_BASE64 }}" | base64 -d > debug.keystore
+
     # ✅ CORRIGIDO: adicionado "clean" antes do "assembleDebug".
     # O cache do Gradle (dependências) continua sendo reaproveitado
     # normalmente — isso só apaga os arquivos INTERMEDIÁRIOS do seu
