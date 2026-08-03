@@ -9,9 +9,12 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -122,6 +125,19 @@ object AppUpdateManager {
         }
     }
 
+    /**
+     * Verifica se falta pedir a permissão POST_NOTIFICATIONS (só existe a
+     * partir do Android 13). Chamar antes de iniciarDownload(), a partir de
+     * uma Activity, pra garantir que a notificação "toque para instalar"
+     * consiga aparecer depois.
+     */
+    fun precisaPedirPermissaoNotificacao(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        return ContextCompat.checkSelfPermission(
+            context, Manifest.permission.POST_NOTIFICATIONS
+        ) != PackageManager.PERMISSION_GRANTED
+    }
+
     /** Abre a tela do sistema onde o usuário ativa "permitir instalar apps desconhecidos". */
     fun abrirTelaPermissaoInstalacao(activity: Activity) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -145,7 +161,7 @@ object AppUpdateManager {
         val request = DownloadManager.Request(Uri.parse(info.apkUrl)).apply {
             setTitle("VLTV Play - Atualização")
             setDescription("Baixando versão ${info.versionName}")
-            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, nomeArquivo)
             setAllowedOverMetered(true)
             setAllowedOverRoaming(true)
@@ -202,6 +218,23 @@ object AppUpdateManager {
      */
     private fun mostrarNotificacaoInstalar(context: Context) {
         val installIntent = montarIntentInstalacao(context) ?: return
+
+        // ✅ A partir do Android 13 (API 33), postar notificação exige a
+        // permissão de runtime POST_NOTIFICATIONS concedida pelo usuário —
+        // ela está declarada no manifest, mas precisa ser pedida em tela
+        // (ver AppUpdateManager.pedirPermissaoNotificacao, chamado do
+        // HomeActivity). Sem isso, NotificationManager.notify() não lança
+        // erro nenhum, só não mostra nada — por isso essa checagem evita
+        // a "notificação fantasma": se não tem permissão, a notificação
+        // padrão do sistema (que já foi restaurada acima, no
+        // VISIBILITY_VISIBLE_NOTIFY_COMPLETED) continua servindo de
+        // rede de segurança.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val permissaoConcedida = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!permissaoConcedida) return
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
