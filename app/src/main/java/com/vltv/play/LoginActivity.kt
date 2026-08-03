@@ -47,13 +47,7 @@ class LoginActivity : AppCompatActivity() {
         "http://cmdtv.pro",
         "http://cmdtv.sbs",
         "http://cmdtv.top",
-        "http://cmdbr.life",
-        "http://zeroum.pro",
-        "http://shozcdn.site",
-        "http://edgelow.site",
-        "http://cdtune.site",
-        "http://radiodiamond.site",
-        "http://gort2.site"
+        "http://cmdbr.life"
     )
 
     private val clientRapido = OkHttpClient.Builder()
