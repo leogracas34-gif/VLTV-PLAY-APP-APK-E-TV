@@ -267,7 +267,7 @@ class HomeActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             try {
-                val resultado = AppUpdateManager.checarAtualizacao(applicationContext, debug = true)
+                val resultado = AppUpdateManager.checarAtualizacao(applicationContext)
                 if (!isFinishing && !isDestroyed &&
                     resultado is AppUpdateManager.CheckResult.UpdateDisponivel) {
                     mostrarDialogoAtualizacao(resultado.info)
