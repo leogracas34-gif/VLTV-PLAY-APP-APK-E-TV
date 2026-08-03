@@ -69,27 +69,19 @@
   - Ambas usam o tema padrão do app, Theme.VLTVPlay.
 
 =============================================================
-  ✅ NOVO: AUTOATUALIZAÇÃO DO APP (FORA DA PLAY STORE)
+  ❌ REMOVIDO: AUTOATUALIZAÇÃO DO APP (FORA DA PLAY STORE)
 =============================================================
 
-  - REQUEST_INSTALL_PACKAGES: permissão necessária pro app poder abrir
-    a tela de instalação de um APK baixado por ele mesmo. A partir do
-    Android 8 (Oreo), essa permissão é concedida pelo usuário POR APP
-    (Configurações > Apps > VLTV+ > Instalar apps desconhecidos), não
-    globalmente — o AppUpdateManager.podeInstalarApks() checa isso em
-    runtime antes de tentar instalar.
+  Sistema de autoatualização via VPS foi desativado por decisão do
+  desenvolvedor (voltou a fazer atualização manual, enviando o APK
+  direto pro cliente). Foram removidos deste manifest:
 
-  - NOVO <provider> (FileProvider): expõe o .apk baixado (que fica em
-    getExternalFilesDir/Download, uma pasta privada do app) através de
-    uma content:// URI temporária, pro instalador do sistema conseguir
-    ler o arquivo. Esse app ainda não tinha nenhum FileProvider (o
-    Media3 não precisa, ele não expõe arquivo pra fora do processo).
-    As authorities usam o padrão "<package>.fileprovider", igual
-    qualquer app Android usa.
+  - A permissão REQUEST_INSTALL_PACKAGES
+  - O <provider> FileProvider (não usado em mais nada no app)
+  - O <receiver> AppUpdateManager$DownloadCompleteReceiver
 
-  - NOVO <receiver> (AppUpdateManager.DownloadCompleteReceiver): escuta
-    quando o DownloadManager termina de baixar o APK e dispara a
-    instalação automaticamente, sem o usuário precisar reabrir o app.
+  Se quiser reativar no futuro, o código-fonte do AppUpdateManager.kt
+  precisa ser recriado e essas três entradas devolvidas aqui.
 
 =============================================================
 -->
@@ -106,9 +98,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <!-- ✅ NOVO: necessária pra abrir a tela de instalação do APK baixado -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".VLTVApplication"
@@ -253,28 +242,6 @@
                 <action android:name="androidx.media3.exoplayer.downloadService.action.RESTART" />
             </intent-filter>
         </service>
-
-        <!-- ✅ NOVO: FileProvider — expõe o APK baixado (pasta privada do
-             app) pro instalador do sistema conseguir ler via content:// -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.fileprovider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_paths" />
-        </provider>
-
-        <!-- ✅ NOVO: detecta quando o download do APK de atualização termina
-             e dispara a instalação automaticamente -->
-        <receiver
-            android:name=".AppUpdateManager$DownloadCompleteReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
-            </intent-filter>
-        </receiver>
 
     </application>
 
