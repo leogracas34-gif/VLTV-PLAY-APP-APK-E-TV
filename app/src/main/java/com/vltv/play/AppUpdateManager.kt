@@ -2,12 +2,16 @@ package com.vltv.play
 
 import android.app.Activity
 import android.app.DownloadManager
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -24,10 +28,17 @@ import java.net.URL
  * 2. Compara o "versionCode" remoto com o BuildConfig.VERSION_CODE instalado
  * 3. Se houver versão nova, retorna um UpdateInfo pra Activity mostrar o diálogo
  * 4. Ao usuário confirmar, iniciarDownload() baixa o APK via DownloadManager do Android
- * 5. Quando o download termina, o DownloadCompleteReceiver dispara instalarApkBaixado(),
- *    que abre a tela nativa de instalação (exige confirmação manual do usuário —
- *    é limitação do próprio Android, não dá pra instalar 100% silencioso sem
- *    o app ser "device owner"/MDM).
+ * 5. Quando o download termina, o DownloadCompleteReceiver dispara uma notificação
+ *    PRÓPRIA (não a genérica do sistema) com um botão "Toque para instalar".
+ *
+ * ⚠️ POR QUE NÃO ABRE A INSTALAÇÃO 100% SOZINHO:
+ * A partir do Android 10, o sistema bloqueia qualquer app de abrir uma tela
+ * (Activity) a partir de um processo em segundo plano sem interação direta
+ * do usuário — é proteção contra apps abrindo telas sozinhos enquanto você
+ * usa o celular. Por isso o download termina e a instalação não abre
+ * automaticamente: precisa de UM toque do usuário (nessa notificação, ou
+ * na notificação padrão do sistema) pra "contar" como interação válida.
+ * Isso vale pra qualquer app — não é limitação do VLTV Play.
  *
  * IMPORTANTE: pra atualização instalar por cima de uma versão já instalada, o
  * APK novo precisa ser assinado com a MESMA chave da versão anterior. Por isso
@@ -41,6 +52,8 @@ object AppUpdateManager {
     private const val PREFS_NAME = "vltv_update_prefs"
     private const val KEY_DOWNLOAD_ID = "download_id"
     private const val KEY_APK_FILENAME = "apk_filename"
+    private const val CHANNEL_ID = "vltv_update_channel"
+    private const val NOTIFICATION_ID = 5501
 
     data class UpdateInfo(
         val versionCode: Int,
@@ -119,14 +132,20 @@ object AppUpdateManager {
         }
     }
 
-    /** Inicia o download do APK via DownloadManager nativo do Android (mostra progresso na barra de notificações). */
+    /**
+     * Inicia o download do APK via DownloadManager nativo do Android.
+     * VISIBILITY_VISIBLE (sem NOTIFY_COMPLETED): mostra a barra de progresso
+     * enquanto baixa, mas NÃO deixa o sistema criar a notificação genérica
+     * de "concluído" — quem avisa o usuário agora é a notificação própria,
+     * disparada pelo DownloadCompleteReceiver quando termina.
+     */
     fun iniciarDownload(context: Context, info: UpdateInfo): Long {
         val nomeArquivo = "vltvplay-${info.versionName}.apk"
 
         val request = DownloadManager.Request(Uri.parse(info.apkUrl)).apply {
             setTitle("VLTV Play - Atualização")
             setDescription("Baixando versão ${info.versionName}")
-            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
             setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, nomeArquivo)
             setAllowedOverMetered(true)
             setAllowedOverRoaming(true)
@@ -138,18 +157,19 @@ object AppUpdateManager {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
             .putLong(KEY_DOWNLOAD_ID, downloadId)
             .putString(KEY_APK_FILENAME, nomeArquivo)
+            .putString("versao_baixada", info.versionName)
             .apply()
 
         return downloadId
     }
 
-    /** Abre a tela nativa de instalação do APK já baixado. Chamado automaticamente ao terminar o download. */
-    fun instalarApkBaixado(context: Context) {
+    /** Monta o Intent que abre a tela nativa de instalação do APK já baixado. */
+    private fun montarIntentInstalacao(context: Context): Intent? {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val nomeArquivo = prefs.getString(KEY_APK_FILENAME, null) ?: return
+        val nomeArquivo = prefs.getString(KEY_APK_FILENAME, null) ?: return null
 
         val apkFile = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), nomeArquivo)
-        if (!apkFile.exists()) return
+        if (!apkFile.exists()) return null
 
         val apkUri = FileProvider.getUriForFile(
             context,
@@ -157,18 +177,71 @@ object AppUpdateManager {
             apkFile
         )
 
-        val installIntent = Intent(Intent.ACTION_VIEW).apply {
+        return Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(apkUri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+    }
 
+    /**
+     * Abre a tela nativa de instalação diretamente (usar quando chamado a
+     * partir de uma interação já garantida do usuário, ex: clique num botão
+     * dentro do próprio app).
+     */
+    fun instalarApkBaixado(context: Context) {
+        val installIntent = montarIntentInstalacao(context) ?: return
         context.startActivity(installIntent)
     }
 
     /**
+     * ✅ NOVO: mostra uma notificação PRÓPRIA (não a padrão do sistema)
+     * assim que o download termina, com um botão "Toque para instalar".
+     * O toque do usuário na notificação conta como interação válida pro
+     * Android permitir abrir a tela de instalação a partir daí.
+     */
+    private fun mostrarNotificacaoInstalar(context: Context) {
+        val installIntent = montarIntentInstalacao(context) ?: return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Atualizações do VLTV Play",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Avisa quando uma nova versão do app termina de baixar"
+            }
+            manager.createNotificationChannel(channel)
+        }
+
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val versao = prefs.getString("versao_baixada", "")
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            0,
+            installIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle("Atualização baixada")
+            .setContentText("Toque para instalar a versão $versao")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTIFICATION_ID, notification)
+    }
+
+    /**
      * Receiver que detecta quando o download do APK terminou e dispara
-     * a instalação automaticamente. Registrado no AndroidManifest.xml.
+     * a notificação própria de "toque para instalar". Registrado no
+     * AndroidManifest.xml.
      */
     class DownloadCompleteReceiver : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -178,7 +251,7 @@ object AppUpdateManager {
                 val idSalvo = prefs.getLong(KEY_DOWNLOAD_ID, -1)
 
                 if (idRecebido != -1L && idRecebido == idSalvo) {
-                    instalarApkBaixado(context)
+                    mostrarNotificacaoInstalar(context)
                 }
             }
         }
