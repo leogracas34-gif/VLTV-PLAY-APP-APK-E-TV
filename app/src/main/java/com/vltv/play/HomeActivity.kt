@@ -287,7 +287,7 @@ class HomeActivity : AppCompatActivity() {
             .setPositiveButton("Atualizar agora") { _, _ ->
                 if (AppUpdateManager.podeInstalarApks(this)) {
                     if (AppUpdateManager.precisaPedirPermissaoNotificacao(this)) {
-                        androidx.core.app.ActivityCompat.requestPermissions
+                        androidx.core.app.ActivityCompat.requestPermissions(
                          this, arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 9001
                         )
                     }
