@@ -286,6 +286,11 @@ class HomeActivity : AppCompatActivity() {
             )
             .setPositiveButton("Atualizar agora") { _, _ ->
                 if (AppUpdateManager.podeInstalarApks(this)) {
+                    if (AppUpdateManager.precisaPedirPermissaoNotificacao(this)) {
+                        androidx.core.app.ActivityCompat.requestPermissions
+                         this, arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 9001
+                        )
+                    }
                     AppUpdateManager.iniciarDownload(this, info)
                     Toast.makeText(this, "Baixando atualização...", Toast.LENGTH_SHORT).show()
                 } else {
