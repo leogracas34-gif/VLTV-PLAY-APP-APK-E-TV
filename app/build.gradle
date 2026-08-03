@@ -24,6 +24,28 @@ android {
         abortOnError = false
     }
 
+    // ✅ NOVO: keystore de debug FIXA, commitada na raiz do repositório
+    // (arquivo debug.keystore, um nível acima da pasta app/).
+    //
+    // Motivo: sem isso, cada execução do GitHub Actions gerava uma keystore
+    // de debug ALEATÓRIA nova, então cada app-debug.apk compilado saía
+    // assinado com uma chave diferente do anterior. Isso funcionava pra
+    // instalar do zero, mas quebrava o sistema de autoatualização — o
+    // Android recusa instalar um APK por cima de um já instalado se a
+    // assinatura não bater ("conflito com um pacote já existente").
+    //
+    // Com essa keystore fixa, todo build do Actions (agora e no futuro)
+    // sai assinado sempre com a mesma chave, e as atualizações passam a
+    // instalar por cima normalmente.
+    signingConfigs {
+        debug {
+            storeFile file("../debug.keystore")
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled true
@@ -32,6 +54,7 @@ android {
         }
         debug {
             minifyEnabled false
+            signingConfig signingConfigs.debug
         }
     }
 
