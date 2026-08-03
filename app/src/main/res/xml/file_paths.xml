@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Usado pelo FileProvider declarado no AndroidManifest.xml.
+  "external-files-path" aponta pra getExternalFilesDir(), que é onde o
+  AppUpdateManager.iniciarDownload() salva o APK (pasta privada do app,
+  em Android/data/com.vltv.play/files/Download/ — não exige permissão
+  de armazenamento).
+
+  Salvar este arquivo em: app/src/main/res/xml/file_paths.xml
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <external-files-path name="downloads" path="Download/" />
+</paths>
+
