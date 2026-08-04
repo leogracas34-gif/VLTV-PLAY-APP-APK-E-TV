@@ -191,14 +191,9 @@
             android:name=".PlayerActivity"
             android:banner="@mipmap/ic_launcher"
             android:supportsPictureInPicture="true"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
-            android:screenOrientation="sensorLandscape" />
-
-        <activity
-            android:name=".PlayerActivity"
-            android:supportsPictureInPicture="true"
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden"
-            android:resizeableActivity="true" />
+            android:resizeableActivity="true"
+            android:screenOrientation="sensorLandscape" />
 
         <!-- ✅ NOVO: Aba de Jogos Retrô -->
         <activity
