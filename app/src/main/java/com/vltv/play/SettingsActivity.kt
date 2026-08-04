@@ -56,6 +56,41 @@ class SettingsActivity : AppCompatActivity() {
     private val SITE_URL = "https://vltvplay.tech"
     private val INSTAGRAM_USERNAME = "vltv_play"
 
+    // ✅ NOVO: Suporte via WhatsApp — número com DDI (55) + DDD (31) + número.
+    // Mensagem pré-pronta já vai preenchida quando o cliente toca no botão.
+    private val WHATSAPP_NUMBER = "5531998491711"
+    private val WHATSAPP_MENSAGEM_PADRAO = "Olá! Preciso de ajuda com o VLTV Play 👋"
+
+    // ✅ NOVO: lista de perguntas frequentes exibidas na tela de FAQ.
+    private data class FaqItem(val pergunta: String, val resposta: String)
+
+    private val FAQ_LIST = listOf(
+        FaqItem(
+            "Como troco minha senha ou usuário?",
+            "Vá em Configurações → Trocar Credenciais, informe o novo usuário e senha e confirme. Atenção: isso apaga o histórico e favoritos do usuário atual neste aparelho."
+        ),
+        FaqItem(
+            "Um canal, filme ou série não está carregando, o que eu faço?",
+            "Feche e abra o app novamente. Se persistir, tente outro conteúdo para verificar se o problema é específico dele. Se continuar, fale com o suporte pelo WhatsApp."
+        ),
+        FaqItem(
+            "Como funciona o Perfil Infantil?",
+            "O Perfil Infantil mostra apenas conteúdo apropriado para crianças e pode ser protegido com PIN de Perfis, para impedir que a criança saia dele sozinha."
+        ),
+        FaqItem(
+            "Como faço para baixar filmes e séries?",
+            "Na tela de detalhes do filme ou do episódio, toque no ícone de download. Você pode acompanhar o progresso e gerenciar os downloads na tela de Downloads."
+        ),
+        FaqItem(
+            "Esqueci o PIN do Controle Parental, e agora?",
+            "Em Configurações → PIN, toque em \"Esqueci o PIN\" e responda a pergunta secreta que você cadastrou ao criar o PIN."
+        ),
+        FaqItem(
+            "Posso usar minha conta em mais de um aparelho ao mesmo tempo?",
+            "Isso depende do seu plano de assinatura. Consulte o suporte pelo WhatsApp para confirmar o limite de telas simultâneas da sua conta."
+        )
+    )
+
     // Views do card de plano
     private lateinit var tvNomePlano: TextView
     private lateinit var tvValidadePlano: TextView
@@ -205,6 +240,18 @@ class SettingsActivity : AppCompatActivity() {
 
         cardAbout?.setOnClickListener { mostrarDialogSobre() }
 
+        // ✅ NOVO: cards de "Falar com Suporte" (WhatsApp) e "Perguntas
+        // Frequentes" (FAQ), injetados dinamicamente logo abaixo de "Sobre o
+        // Aplicativo" — mesmo padrão já usado pro card de PIN de Perfis mais
+        // abaixo nesta Activity. Não precisa mexer no activity_settings.xml.
+        cardAbout?.let { about ->
+            (about.parent as? ViewGroup)?.let { parent ->
+                val indexAbout = parent.indexOfChild(about)
+                parent.addView(criarCardFaq(), indexAbout + 1)
+                parent.addView(criarCardSuporteWhatsapp(), indexAbout + 1)
+            }
+        }
+
         cardTrocarLogin?.setOnClickListener { mostrarDialogTrocarCredenciais() }
 
         cardLogout?.setOnClickListener {
@@ -283,7 +330,253 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     // ============================================================================
-    // ✅ NOVO: Dialog "Sobre o Aplicativo" com wordmark profissional (VLTV + Play)
+    // ✅ NOVO: Suporte via WhatsApp + FAQ
+    // ============================================================================
+
+    // ✅ Desenha um ícone circular colorido com um emoji no centro — usado nos
+    // cards de Suporte/FAQ pra não depender de nenhum ícone nativo do Android
+    // (que costuma destoar visualmente do resto do app).
+    private fun criarIconeCircular(emoji: String, corFundoHex: String, sizeDp: Int = 36): TextView {
+        return TextView(this).apply {
+            text = emoji
+            textSize = 16f
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(sizeDp.dp, sizeDp.dp)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor(corFundoHex))
+            }
+        }
+    }
+
+    private fun abrirWhatsAppSuporte() {
+        val uri = Uri.parse(
+            "https://api.whatsapp.com/send?phone=$WHATSAPP_NUMBER&text=${Uri.encode(WHATSAPP_MENSAGEM_PADRAO)}"
+        )
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, uri)
+            intent.setPackage("com.whatsapp")
+            startActivity(intent)
+        } catch (e: Exception) {
+            // Fallback: WhatsApp não instalado, ou app WhatsApp Business
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, uri))
+            } catch (e2: Exception) {
+                mostrarToastPremium("Não foi possível abrir o WhatsApp")
+            }
+        }
+    }
+
+    private fun criarCardSuporteWhatsapp(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(16.dp, 14.dp, 16.dp, 14.dp)
+            isClickable = true; isFocusable = true
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A1A1A"))
+                cornerRadius = 10.dp.toFloat()
+                setStroke(1.dp, Color.parseColor("#2A2A2A"))
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = 10.dp
+                marginStart = 16.dp
+                marginEnd = 16.dp
+            }
+
+            addView(criarIconeCircular("💬", "#25D366", 36))
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = 12.dp
+                }
+                addView(TextView(context).apply {
+                    text = "Falar com Suporte"
+                    textSize = 14f; typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(Color.WHITE)
+                })
+                addView(TextView(context).apply {
+                    text = "Atendimento via WhatsApp"
+                    textSize = 11f
+                    setTextColor(Color.parseColor("#888888"))
+                })
+            })
+            addView(TextView(context).apply {
+                text = "›"; textSize = 20f; setTextColor(Color.parseColor("#555555"))
+            })
+            setOnClickListener { abrirWhatsAppSuporte() }
+        }
+    }
+
+    private fun criarCardFaq(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(16.dp, 14.dp, 16.dp, 14.dp)
+            isClickable = true; isFocusable = true
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A1A1A"))
+                cornerRadius = 10.dp.toFloat()
+                setStroke(1.dp, Color.parseColor("#2A2A2A"))
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = 10.dp
+                marginStart = 16.dp
+                marginEnd = 16.dp
+            }
+
+            addView(criarIconeCircular("❓", "#2A2A2A", 36))
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = 12.dp
+                }
+                addView(TextView(context).apply {
+                    text = "Perguntas Frequentes"
+                    textSize = 14f; typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(Color.WHITE)
+                })
+                addView(TextView(context).apply {
+                    text = "Dúvidas comuns sobre o app"
+                    textSize = 11f
+                    setTextColor(Color.parseColor("#888888"))
+                })
+            })
+            addView(TextView(context).apply {
+                text = "›"; textSize = 20f; setTextColor(Color.parseColor("#555555"))
+            })
+            setOnClickListener { mostrarDialogFaq() }
+        }
+    }
+
+    // ✅ Dialog com lista de perguntas expansíveis (toque na pergunta pra
+    // abrir/fechar a resposta) e um atalho no final direto pro WhatsApp,
+    // caso a dúvida do cliente não esteja na lista.
+    private fun mostrarDialogFaq() {
+        val dialog = android.app.Dialog(this)
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+
+        val scrollView = ScrollView(this).apply { overScrollMode = ScrollView.OVER_SCROLL_NEVER }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#141414"))
+            setPadding(0, 0, 0, 0)
+        }
+
+        root.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(24.dp, 24.dp, 24.dp, 16.dp)
+            addView(criarIconeCircular("❓", "#2A2A2A", 40))
+            addView(TextView(context).apply {
+                text = "Perguntas Frequentes"
+                textSize = 17f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = 12.dp
+                }
+            })
+        })
+
+        fun divider() = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1)
+            setBackgroundColor(Color.parseColor("#222222"))
+        }
+        root.addView(divider())
+
+        FAQ_LIST.forEach { item ->
+            val tvResposta = TextView(this).apply {
+                text = item.resposta
+                textSize = 12.5f
+                setTextColor(Color.parseColor("#AAAAAA"))
+                setLineSpacing(0f, 1.4f)
+                visibility = View.GONE
+                setPadding(24.dp, 0, 24.dp, 16.dp)
+            }
+            val tvSinal = TextView(this).apply {
+                text = "+"
+                textSize = 18f
+                setTextColor(Color.parseColor("#555555"))
+                layoutParams = LinearLayout.LayoutParams(24.dp, LinearLayout.LayoutParams.WRAP_CONTENT)
+                gravity = Gravity.CENTER
+            }
+            val headerRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(24.dp, 16.dp, 24.dp, 16.dp)
+                isClickable = true; isFocusable = true
+                background = android.graphics.drawable.RippleDrawable(
+                    android.content.res.ColorStateList.valueOf(Color.parseColor("#22FFFFFF")), null, null
+                )
+                addView(TextView(context).apply {
+                    text = item.pergunta
+                    textSize = 14f
+                    setTextColor(Color.WHITE)
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                addView(tvSinal)
+                setOnClickListener {
+                    val vaiAbrir = tvResposta.visibility == View.GONE
+                    tvResposta.visibility = if (vaiAbrir) View.VISIBLE else View.GONE
+                    tvSinal.text = if (vaiAbrir) "−" else "+"
+                }
+            }
+            root.addView(headerRow)
+            root.addView(tvResposta)
+            root.addView(divider())
+        }
+
+        root.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(24.dp, 18.dp, 24.dp, 8.dp)
+            isClickable = true; isFocusable = true
+            addView(criarIconeCircular("💬", "#25D366", 34))
+            addView(TextView(context).apply {
+                text = "Não encontrou sua dúvida? Fale com o suporte"
+                textSize = 13f
+                setTextColor(Color.parseColor("#4FC3F7"))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginStart = 12.dp
+                }
+            })
+            setOnClickListener { dialog.dismiss(); abrirWhatsAppSuporte() }
+        })
+
+        root.addView(TextView(this).apply {
+            text = "Fechar"
+            textSize = 14f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.BLACK)
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 48.dp
+            ).apply { setMargins(24.dp, 12.dp, 24.dp, 20.dp) }
+            background = GradientDrawable().apply { setColor(Color.WHITE); cornerRadius = 8.dp.toFloat() }
+            isClickable = true; isFocusable = true
+            setOnClickListener { dialog.dismiss() }
+        })
+
+        scrollView.addView(root)
+        dialog.setContentView(scrollView)
+        dialog.window?.apply {
+            setBackgroundDrawable(GradientDrawable().apply {
+                setColor(Color.parseColor("#141414"))
+                cornerRadius = 16.dp.toFloat()
+            })
+            val p = attributes
+            p.width  = (resources.displayMetrics.widthPixels * 0.9).toInt()
+            p.height = (resources.displayMetrics.heightPixels * 0.75).toInt()
+            attributes = p
+        }
+        dialog.show()
+    }
+
+    // ============================================================================
+    // ✅ Dialog "Sobre o Aplicativo" com wordmark profissional (VLTV + Play)
     // e links clicáveis para o site e o Instagram oficiais.
     // ============================================================================
 
