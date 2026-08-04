@@ -194,6 +194,12 @@
             android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
             android:screenOrientation="sensorLandscape" />
 
+        <activity
+            android:name=".PlayerActivity"
+            android:supportsPictureInPicture="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden"
+            android:resizeableActivity="true" />
+
         <!-- ✅ NOVO: Aba de Jogos Retrô -->
         <activity
             android:name=".retro.RetroGamesActivity"
