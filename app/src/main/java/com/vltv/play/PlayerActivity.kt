@@ -447,6 +447,27 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    // ✅ NOVO: garante que só existe UM ExoPlayer tocando áudio no app
+    // inteiro por vez. Sem isso, se o usuário minimiza um vídeo em PiP
+    // (que continua tocando de propósito) e abre outro conteúdo por trás
+    // pela Home, a instância antiga (ainda viva dentro do PiP) e a nova
+    // ficariam tocando áudio ao mesmo tempo — o mesmo bug de "dois áudios
+    // juntos" de antes, só que agora pelo caminho do PiP em vez do caminho
+    // antigo de troca de tela. Chamado sempre ANTES de criar um novo
+    // ExoPlayer, tanto no fluxo online quanto no offline.
+    private fun liberarPlayerGlobalDeOutraInstancia() {
+        val outroPlayer = activePlayer
+        if (outroPlayer != null && outroPlayer !== player) {
+            try {
+                outroPlayer.stop()
+                outroPlayer.release()
+            } catch (e: Exception) {
+                Log.e("PLAYER_GLOBAL", "Erro ao liberar player de outra instância: ${e.message}")
+            }
+        }
+        activePlayer = null
+    }
+
     // ✅ NOVO: bloco de reprodução offline reescrito para usar o
     // CacheDataSource do Media3 (lendo do mesmo SimpleCache usado pelo
     // DownloadHelper pra baixar). "contentId" é a chave que localiza os
@@ -464,6 +485,7 @@ class PlayerActivity : AppCompatActivity() {
                 return
             }
 
+            liberarPlayerGlobalDeOutraInstancia()
             player?.release()
 
             val audioAttributes = AudioAttributes.Builder()
@@ -485,6 +507,7 @@ class PlayerActivity : AppCompatActivity() {
                 .setMediaSourceFactory(mediaSourceFactory)
                 .setAudioAttributes(audioAttributes, true)
                 .build()
+            activePlayer = player
 
             playerView.player = player
 
@@ -543,6 +566,7 @@ class PlayerActivity : AppCompatActivity() {
             ext        = currentExt
         )
 
+        liberarPlayerGlobalDeOutraInstancia()
         player?.release()
 
         val dataSourceFactory = DefaultHttpDataSource.Factory()
@@ -574,6 +598,7 @@ class PlayerActivity : AppCompatActivity() {
             .setLoadControl(loadControl)
             .setAudioAttributes(audioAttributes, true)
             .build()
+        activePlayer = player
 
         playerView.player = player
 
@@ -637,6 +662,7 @@ class PlayerActivity : AppCompatActivity() {
         nextEpisodeContainer.visibility = View.GONE
         tvSeasonEndWarning.visibility = View.GONE
 
+        if (activePlayer === player) activePlayer = null
         player?.stop()
         player?.release()
         player = null
@@ -912,6 +938,11 @@ class PlayerActivity : AppCompatActivity() {
                 saveSeriesResume(streamId, p.currentPosition, p.duration)
             }
         }
+        // ✅ NOVO: limpa a referência global ANTES de nulificar o player
+        // local, e só se ainda for a mesma instância — evita que a
+        // instância antiga, ao ser destruída, apague por engano a
+        // referência de uma instância mais nova que já assumiu o áudio.
+        if (activePlayer === player) activePlayer = null
         player?.release()
         player = null
     }
@@ -925,11 +956,13 @@ class PlayerActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !isInPictureInPictureMode) {
+            if (activePlayer === player) activePlayer = null
             player?.stop()
             player?.release()
             player = null
         }
         if (isFinishing) {
+            if (activePlayer === player) activePlayer = null
             player?.release()
             player = null
         }
@@ -937,6 +970,7 @@ class PlayerActivity : AppCompatActivity() {
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
+        if (activePlayer === player) activePlayer = null
         player?.stop()
         player?.release()
         player = null
@@ -951,5 +985,14 @@ class PlayerActivity : AppCompatActivity() {
         // vinculado a nenhuma Activity — sobrevive ao fechamento rápido da
         // tela do player, diferente do lifecycleScope usado antes.
         private val historicoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        // ✅ NOVO: referência estática ao ExoPlayer atualmente tocando, em
+        // QUALQUER instância da PlayerActivity (inclusive uma que esteja
+        // minimizada em Picture-in-Picture). Serve como trava única contra
+        // dois áudios tocando ao mesmo tempo — antes de qualquer instância
+        // criar um player novo, ela verifica e libera essa referência caso
+        // pertença a uma instância diferente da sua.
+        @Volatile
+        private var activePlayer: ExoPlayer? = null
     }
 }
