@@ -138,6 +138,23 @@
                 android:focusable="true"
                 android:focusableInTouchMode="true"/>
 
+            <!-- Busca por voz — pensado pra criança que ainda não digita/lê bem -->
+            <LinearLayout
+                android:id="@+id/btnVoiceKids"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:gravity="center"
+                android:background="@drawable/bg_kids_btn_back"
+                android:layout_marginStart="8dp"
+                android:clickable="true"
+                android:focusable="true">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🎤"
+                    android:textSize="16sp"/>
+            </LinearLayout>
+
             <TextView
                 android:id="@+id/btnCloseSearch"
                 android:layout_width="40dp"
@@ -352,11 +369,6 @@
         </androidx.core.widget.NestedScrollView>
 
         <!-- ── BOTTOM NAVIGATION ─────────────────────────────────────────── -->
-        <!-- ✅ Menu exclusivo do Kids (bottom_nav_menu_kids) — sem "Novidades"
-             (não existe versão infantil segura dessa seção). O item "Buscar"
-             agora só abre/fecha a barra de busca interna (filtra o catálogo
-             já carregado aqui mesmo). O item "Perfil" pede confirmação antes
-             de sair da Área Kids — ver KidsActivity.kt. -->
         <com.google.android.material.bottomnavigation.BottomNavigationView
             android:id="@+id/bottomNavigation"
             android:layout_width="match_parent"
