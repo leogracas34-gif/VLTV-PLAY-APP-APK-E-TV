@@ -1,20 +1,31 @@
 package com.vltv.play
 
+import android.Manifest
+import android.animation.ObjectAnimator
+import android.app.Dialog
 import android.content.Context
 import android.content.Intent
-import android.content.res.Configuration
+import android.content.pm.PackageManager
 import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
+import android.view.animation.LinearInterpolator
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -33,11 +44,12 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
 
     private lateinit var etQuery: EditText
     private lateinit var btnDoSearch: ImageButton
+    private lateinit var btnVoiceSearch: ImageButton
     private lateinit var rvResults: RecyclerView
     private lateinit var adapter: SearchResultAdapter
     private lateinit var progressBar: ProgressBar
     private lateinit var tvEmpty: TextView
-    
+
     // DATABASE INICIALIZADA VIA LAZY
     private val database by lazy { AppDatabase.getDatabase(this) }
 
@@ -57,6 +69,21 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
     // Guarda de onde o usuário veio ("filmes", "series" ou "tudo")
     private var tipoPesquisa: String = "tudo"
 
+    // --- BUSCA POR VOZ ---
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var voiceDialog: Dialog? = null
+    private var pulseAnimator: ObjectAnimator? = null
+
+    private val micPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            iniciarBuscaPorVoz()
+        } else {
+            Toast.makeText(this, "Permissão de microfone necessária para busca por voz", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     // Detecção de TV centralizada em DeviceUtils.kt (context.isTelevisionDevice()),
     // usada em todo o app — não reimplementar localmente aqui.
 
@@ -67,20 +94,21 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
         // Configuração de Tela Cheia / Barras
         val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
         windowInsetsController?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        
+
         if (this.isTelevisionDevice()) {
             windowInsetsController?.hide(WindowInsetsCompat.Type.systemBars())
         } else {
             windowInsetsController?.show(WindowInsetsCompat.Type.systemBars())
         }
-        
+
         // Captura a etiqueta enviada pela tela anterior (Padrão é "tudo")
         tipoPesquisa = intent.getStringExtra("tipo_pesquisa") ?: "tudo"
 
         initViews()
         setupRecyclerView()
         setupSearchLogic()
-        
+        setupVoiceSearch()
+
         // Carregamento Híbrido: Primeiro Database, depois API
         carregarDadosIniciais()
     }
@@ -88,6 +116,7 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
     private fun initViews() {
         etQuery = findViewById(R.id.etQuery)
         btnDoSearch = findViewById(R.id.btnDoSearch)
+        btnVoiceSearch = findViewById(R.id.btnVoiceSearch)
         rvResults = findViewById(R.id.rvResults)
         progressBar = findViewById(R.id.progressBar)
         tvEmpty = findViewById(R.id.tvEmpty)
@@ -103,7 +132,7 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
 
         // 5 colunas se for TV, 3 colunas se for Celular
         val spanCount = if (this.isTelevisionDevice()) 5 else 3
-        
+
         rvResults.layoutManager = GridLayoutManager(this, spanCount)
         rvResults.adapter = adapter
         rvResults.isFocusable = true
@@ -133,8 +162,8 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
         })
 
-        btnDoSearch.setOnClickListener { 
-            filtrarNaMemoria(etQuery.text.toString().trim()) 
+        btnDoSearch.setOnClickListener {
+            filtrarNaMemoria(etQuery.text.toString().trim())
         }
 
         etQuery.setOnEditorActionListener { _, actionId, _ ->
@@ -145,12 +174,117 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
         }
     }
 
+    // --- BUSCA POR VOZ: SETUP ---
+
+    private fun setupVoiceSearch() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            btnVoiceSearch.visibility = View.GONE
+            return
+        }
+
+        btnVoiceSearch.setOnClickListener {
+            val permissao = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            if (permissao == PackageManager.PERMISSION_GRANTED) {
+                iniciarBuscaPorVoz()
+            } else {
+                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        }
+    }
+
+    private fun iniciarBuscaPorVoz() {
+        mostrarDialogoVoz()
+
+        speechRecognizer?.destroy()
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+            setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {}
+                override fun onBeginningOfSpeech() {}
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {
+                    voiceDialog?.findViewById<TextView>(R.id.tvVoiceStatus)?.text = "Buscando..."
+                }
+
+                override fun onError(error: Int) {
+                    fecharDialogoVoz()
+                    val msg = when (error) {
+                        SpeechRecognizer.ERROR_NO_MATCH,
+                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Não entendi, tente novamente"
+                        SpeechRecognizer.ERROR_NETWORK,
+                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Sem conexão com a internet"
+                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Permissão de microfone negada"
+                        else -> null
+                    }
+                    if (msg != null) {
+                        Toast.makeText(this@SearchActivity, msg, Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+                override fun onResults(results: Bundle?) {
+                    fecharDialogoVoz()
+                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    val texto = matches?.firstOrNull()
+                    if (!texto.isNullOrBlank()) {
+                        etQuery.setText(texto)
+                        etQuery.setSelection(texto.length)
+                        // O TextWatcher já dispara a busca automaticamente ao setar o texto
+                    }
+                }
+
+                override fun onPartialResults(partialResults: Bundle?) {}
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+        }
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+        }
+        speechRecognizer?.startListening(intent)
+    }
+
+    private fun mostrarDialogoVoz() {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.setContentView(R.layout.dialog_voice_search)
+        dialog.setCancelable(true)
+        dialog.setOnCancelListener {
+            speechRecognizer?.stopListening()
+            pulseAnimator?.cancel()
+        }
+        dialog.show()
+        voiceDialog = dialog
+
+        val pulseView = dialog.findViewById<View>(R.id.viewPulse)
+        pulseAnimator = ObjectAnimator.ofFloat(pulseView, "scaleX", 1f, 1.4f, 1f).apply {
+            duration = 900
+            repeatCount = ObjectAnimator.INFINITE
+            interpolator = LinearInterpolator()
+        }
+        val pulseAnimatorY = ObjectAnimator.ofFloat(pulseView, "scaleY", 1f, 1.4f, 1f).apply {
+            duration = 900
+            repeatCount = ObjectAnimator.INFINITE
+            interpolator = LinearInterpolator()
+        }
+        pulseAnimator?.start()
+        pulseAnimatorY.start()
+    }
+
+    private fun fecharDialogoVoz() {
+        pulseAnimator?.cancel()
+        voiceDialog?.dismiss()
+        voiceDialog = null
+    }
+
     private fun carregarDadosIniciais() {
         isCarregandoDados = true
         progressBar.visibility = View.VISIBLE
         tvEmpty.text = "Carregando catálogo..."
         tvEmpty.visibility = View.VISIBLE
-        etQuery.isEnabled = false 
+        etQuery.isEnabled = false
 
         val prefs = getSharedPreferences("vltv_prefs", MODE_PRIVATE)
         val username = prefs.getString("username", "") ?: ""
@@ -158,14 +292,6 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
 
         launch {
             try {
-                // ✅ CORREÇÃO: TENTA CARREGAR DA DATABASE PRIMEIRO — agora usando
-                // o catálogo LOCAL COMPLETO (getAllVods/getAllSeries), sem limite
-                // de 2000 itens. Antes, com getRecentVods(2000)/getRecentSeries(2000),
-                // títulos que não estavam entre os "2000 mais recentes" (ex: "Avatar")
-                // simplesmente não existiam na lista até a API completa terminar de
-                // carregar — daí a sensação de "não acha nada, só depois de um tempo
-                // aparece". A leitura local completa é praticamente instantânea
-                // mesmo com milhares de itens, então não há motivo pra limitar aqui.
                 val resultadosLocal = withContext(Dispatchers.IO) {
                     val filmes = if (tipoPesquisa == "tudo" || tipoPesquisa == "filmes") {
                         database.streamDao().getAllVods().map {
@@ -190,7 +316,7 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
                             )
                         }
                     } else emptyList()
-                    
+
                     filmes + series
                 }
 
@@ -199,9 +325,6 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
                     finalizarUI()
                 }
 
-                // BUSCA NA API EM SEGUNDO PLANO (mantém o catálogo sempre atualizado
-                // com o que está no servidor, mas não é mais a única fonte capaz de
-                // achar títulos antigos — isso já é resolvido pelo catálogo local)
                 val resultadosAPI = withContext(Dispatchers.IO) {
                     val deferredFilmes = if (tipoPesquisa == "tudo" || tipoPesquisa == "filmes") async { buscarFilmes(username, password) } else null
                     val deferredSeries = if (tipoPesquisa == "tudo" || tipoPesquisa == "series") async { buscarSeries(username, password) } else null
@@ -238,12 +361,10 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
 
         val initial = intent.getStringExtra("initial_query")
         if (!initial.isNullOrBlank()) {
-            // Veio com query pré-definida pela intent
             etQuery.setText(initial)
             ultimaQueryDigitada = initial
             filtrarNaMemoria(initial)
         } else if (ultimaQueryDigitada.isNotEmpty()) {
-            // ✅ CORREÇÃO: Usuário digitou enquanto carregava — reaplica agora que o catálogo chegou
             filtrarNaMemoria(ultimaQueryDigitada)
         } else {
             tvEmpty.text = "Digite para buscar..."
@@ -265,18 +386,18 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
 
         val resultadosFiltrados = catalogoCompleto.filter { item ->
             val matchNome = item.title.lowercase().contains(qNorm)
-            
+
             val matchTipo = when (tipoPesquisa) {
                 "filmes" -> item.type == "movie"
                 "series" -> item.type == "series"
                 else -> true
             }
-            
+
             matchNome && matchTipo
-        }.take(100) 
+        }.take(100)
 
         adapter.submitList(resultadosFiltrados)
-        
+
         if (resultadosFiltrados.isEmpty()) {
             tvEmpty.text = "Nenhum resultado encontrado."
             tvEmpty.visibility = View.VISIBLE
@@ -286,7 +407,7 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
     }
 
     // --- FUNÇÕES DE API ---
-    
+
     private fun buscarFilmes(u: String, p: String): List<SearchResultItem> {
         return try {
             val response = XtreamApi.service.getAllVodStreams(user = u, pass = p).execute()
@@ -331,7 +452,7 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
                         title = it.name ?: "Sem Nome",
                         type = "live",
                         extraInfo = null,
-                        iconUrl = it.icon 
+                        iconUrl = it.icon
                     )
                 }
             } else emptyList()
@@ -374,6 +495,7 @@ class SearchActivity : AppCompatActivity(), CoroutineScope {
 
     override fun onDestroy() {
         super.onDestroy()
+        speechRecognizer?.destroy()
         supervisor.cancel()
     }
 }
