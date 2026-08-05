@@ -1,10 +1,12 @@
 package com.vltv.play
 
+import android.Manifest
 import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -12,6 +14,9 @@ import android.graphics.drawable.LayerDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.text.InputType
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -25,7 +30,9 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -74,6 +81,21 @@ class KidsActivity : AppCompatActivity() {
     // do topo e no callback do botão/gesto de voltar do sistema, já que os
     // três agora disparam a MESMA confirmação de saída da Área Kids.
     private lateinit var bottomNav: BottomNavigationView
+
+    private lateinit var btnVoiceKids: LinearLayout
+    private var speechRecognizerKids: SpeechRecognizer? = null
+    private var voiceDialogKids: android.app.Dialog? = null
+    private val pulseAnimatorsKids = mutableListOf<ObjectAnimator>()
+
+    private val micPermissionLauncherKids = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            iniciarBuscaPorVozKids()
+        } else {
+            Toast.makeText(this, "Permissão de microfone necessária para busca por voz", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // ✅ CORREÇÃO CRÍTICA DE DOWNLOAD: antes a KidsActivity nunca informava
     // qual perfil estava ativo pra DetailsActivity/SeriesDetailsActivity
@@ -298,6 +320,7 @@ class KidsActivity : AppCompatActivity() {
         etSearchKids         = findViewById(R.id.etSearchKids)
         layoutSearchBar      = findViewById(R.id.layoutSearchBar)
         layoutContinueHeader = findViewById(R.id.layoutContinueHeader)
+        btnVoiceKids         = findViewById(R.id.btnVoiceKids)
 
         // ── Voltar (topo) ────────────────────────────────────────────────
         // ✅ AJUSTE: antes chamava finish() direto, saindo da Área Kids sem
@@ -334,23 +357,14 @@ class KidsActivity : AppCompatActivity() {
             if (actionId == EditorInfo.IME_ACTION_SEARCH ||
                 actionId == EditorInfo.IME_ACTION_DONE ||
                 actionId == EditorInfo.IME_ACTION_GO) {
-
-                val query = v.text.toString().trim()
-                val contemProibido = termosProibidosBusca.any { query.contains(it, ignoreCase = true) }
                 val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
                 imm.hideSoftInputFromWindow(v.windowToken, 0)
-
-                when {
-                    contemProibido -> {
-                        Toast.makeText(this, "Busca bloqueada na Área Kids 🛡️", Toast.LENGTH_LONG).show()
-                        etSearchKids.setText("")
-                    }
-                    query.isEmpty() -> restaurarCatalogoCompleto()
-                    else -> aplicarBuscaInterna(query)
-                }
+                processarConsultaBuscaKids(v.text.toString())
                 true
             } else false
         }
+
+        setupVoiceSearchKids()
 
         setupLayouts()
         setupHubChannels()
@@ -459,6 +473,143 @@ class KidsActivity : AppCompatActivity() {
         val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.hideSoftInputFromWindow(etSearchKids.windowToken, 0)
         restaurarCatalogoCompleto()
+    }
+
+    // ── Busca por voz — mesmo texto digitado passa pelo mesmo filtro de
+    // segurança (termosProibidosBusca) usado na busca por teclado ─────────
+    private fun processarConsultaBuscaKids(queryRaw: String) {
+        val query = queryRaw.trim()
+        val contemProibido = termosProibidosBusca.any { query.contains(it, ignoreCase = true) }
+        when {
+            contemProibido -> {
+                Toast.makeText(this, "Busca bloqueada na Área Kids 🛡️", Toast.LENGTH_LONG).show()
+                etSearchKids.setText("")
+            }
+            query.isEmpty() -> restaurarCatalogoCompleto()
+            else -> aplicarBuscaInterna(query)
+        }
+    }
+
+    private fun setupVoiceSearchKids() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            btnVoiceKids.visibility = View.GONE
+            return
+        }
+        btnVoiceKids.setOnClickListener {
+            val permissao = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            if (permissao == PackageManager.PERMISSION_GRANTED) {
+                iniciarBuscaPorVozKids()
+            } else {
+                micPermissionLauncherKids.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        }
+    }
+
+    private fun iniciarBuscaPorVozKids() {
+        mostrarDialogoVozKids()
+
+        speechRecognizerKids?.destroy()
+        speechRecognizerKids = SpeechRecognizer.createSpeechRecognizer(this).apply {
+            setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {}
+                override fun onBeginningOfSpeech() {}
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {
+                    voiceDialogKids?.findViewById<TextView>(R.id.tvVoiceStatusKids)?.text = "Procurando... 🔎"
+                }
+
+                override fun onError(error: Int) {
+                    fecharDialogoVozKids()
+                    val msg = when (error) {
+                        SpeechRecognizer.ERROR_NO_MATCH,
+                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Não entendi, tenta de novo! 😅"
+                        SpeechRecognizer.ERROR_NETWORK,
+                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Sem internet no momento"
+                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Permissão de microfone negada"
+                        else -> null
+                    }
+                    if (msg != null) Toast.makeText(this@KidsActivity, msg, Toast.LENGTH_SHORT).show()
+                }
+
+                override fun onResults(results: Bundle?) {
+                    fecharDialogoVozKids()
+                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    val texto = matches?.firstOrNull()
+                    if (!texto.isNullOrBlank()) {
+                        if (layoutSearchBar.visibility == View.GONE) {
+                            layoutSearchBar.visibility = View.VISIBLE
+                            layoutSearchBar.alpha = 1f
+                        }
+                        etSearchKids.setText(texto)
+                        processarConsultaBuscaKids(texto)
+                    }
+                }
+
+                override fun onPartialResults(partialResults: Bundle?) {}
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+        }
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+        }
+        speechRecognizerKids?.startListening(intent)
+    }
+
+    private fun mostrarDialogoVozKids() {
+        val dialog = android.app.Dialog(this)
+        dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.setContentView(R.layout.dialog_voice_search_kids)
+        dialog.setCancelable(true)
+        dialog.setOnCancelListener {
+            speechRecognizerKids?.stopListening()
+            pararPulsosKids()
+        }
+        dialog.show()
+        voiceDialogKids = dialog
+
+        val ring1 = dialog.findViewById<View>(R.id.viewPulseRing1)
+        val ring2 = dialog.findViewById<View>(R.id.viewPulseRing2)
+        val ring3 = dialog.findViewById<View>(R.id.viewPulseRing3)
+        val micIcon = dialog.findViewById<View>(R.id.ivMicKids)
+
+        pulseAnimatorsKids.clear()
+        listOf(ring1 to 0L, ring2 to 200L, ring3 to 400L).forEach { (view, delay) ->
+            val sx = ObjectAnimator.ofFloat(view, "scaleX", 1f, 1.6f, 1f).apply {
+                duration = 1000; startDelay = delay; repeatCount = ObjectAnimator.INFINITE
+            }
+            val sy = ObjectAnimator.ofFloat(view, "scaleY", 1f, 1.6f, 1f).apply {
+                duration = 1000; startDelay = delay; repeatCount = ObjectAnimator.INFINITE
+            }
+            val alpha = ObjectAnimator.ofFloat(view, "alpha", 0.6f, 0f, 0.6f).apply {
+                duration = 1000; startDelay = delay; repeatCount = ObjectAnimator.INFINITE
+            }
+            sx.start(); sy.start(); alpha.start()
+            pulseAnimatorsKids.add(sx); pulseAnimatorsKids.add(sy); pulseAnimatorsKids.add(alpha)
+        }
+
+        val bounce = ObjectAnimator.ofFloat(micIcon, "translationY", 0f, -10f, 0f).apply {
+            duration = 700
+            repeatCount = ObjectAnimator.INFINITE
+            interpolator = DecelerateInterpolator()
+        }
+        bounce.start()
+        pulseAnimatorsKids.add(bounce)
+    }
+
+    private fun pararPulsosKids() {
+        pulseAnimatorsKids.forEach { it.cancel() }
+        pulseAnimatorsKids.clear()
+    }
+
+    private fun fecharDialogoVozKids() {
+        pararPulsosKids()
+        voiceDialogKids?.dismiss()
+        voiceDialogKids = null
     }
 
     // ── Animação de entrada nas seções ────────────────────────────────────
@@ -1284,5 +1435,10 @@ class KidsActivity : AppCompatActivity() {
                 view.animate().scaleX(1f).scaleY(1f).setDuration(80)
                     .withEndAction { onEnd() }.start()
             }.start()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        speechRecognizerKids?.destroy()
     }
 }
