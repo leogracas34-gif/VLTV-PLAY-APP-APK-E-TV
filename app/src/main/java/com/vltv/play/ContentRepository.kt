@@ -17,21 +17,42 @@ import kotlinx.coroutines.*
  *   App inicia → VLTVApplication.onCreate() → ContentRepository.preCarregar()
  *   VodActivity.onCreate() → ContentRepository.getVodsByCategory("123") → instantâneo
  *   SeriesActivity.onCreate() → ContentRepository.getSeriesByCategory("456") → instantâneo
+ *
+ * ✅ CORREÇÃO (Home abrindo vazia na 1ª instalação / troca de conta):
+ * preCarregar() só roda de verdade UMA vez por processo (guard `if (pronto)
+ * return`). O VLTVApplication chama preCarregar() assim que o app abre,
+ * ANTES do login — nessa hora o Room ainda está vazio (instalação nova) ou
+ * zerado (troca de conta), então `pronto` já vira `true` com listas VAZIAS.
+ * Depois do login, LoginActivity chamava preCarregar() de novo esperando
+ * recarregar com os dados reais — mas o guard barrava essa chamada, que não
+ * fazia absolutamente nada. Resultado: a Home abria com pronto=true e listas
+ * vazias, e só se recuperava se o listener do SyncManager conseguisse
+ * disparar popularTelaDoRepositorio() depois (ou fechando e reabrindo o app,
+ * quando o processo novo lia o Room já sincronizado da sessão anterior).
+ * Agora existe recarregar() — mesma lógica, mas SEM o guard — para ser
+ * chamado explicitamente depois do login.
+ *
+ * ✅ CORREÇÃO (visibilidade entre threads): os campos abaixo são escritos
+ * numa coroutine em Dispatchers.IO e lidos diretamente (sem coroutine) na
+ * Main thread, por exemplo em `if (ContentRepository.pronto)` dentro de
+ * HomeActivity.onCreate(). Sem @Volatile, a JVM não garante que essa escrita
+ * seja visível imediatamente para outra thread — dependendo do timing, a
+ * Home podia ler um `pronto` desatualizado. @Volatile força essa visibilidade.
  */
 object ContentRepository {
 
     // ── Listas planas (usadas pela Home, busca, Top10, Novidades) ─────────────
-    var vods:   List<VodEntity>        = emptyList(); private set
-    var series: List<SeriesEntity>     = emptyList(); private set
-    var lives:  List<LiveStreamEntity> = emptyList(); private set
+    @Volatile var vods:   List<VodEntity>        = emptyList(); private set
+    @Volatile var series: List<SeriesEntity>     = emptyList(); private set
+    @Volatile var lives:  List<LiveStreamEntity> = emptyList(); private set
 
     // ── Mapas por categoria (usados por VodActivity e SeriesActivity) ─────────
     // Chave = category_id. Acesso em O(1), completamente instantâneo.
-    private var vodsPorCategoria:   Map<String, List<VodEntity>>    = emptyMap()
-    private var seriesPorCategoria: Map<String, List<SeriesEntity>> = emptyMap()
+    @Volatile private var vodsPorCategoria:   Map<String, List<VodEntity>>    = emptyMap()
+    @Volatile private var seriesPorCategoria: Map<String, List<SeriesEntity>> = emptyMap()
 
     // ── Estado de carregamento ────────────────────────────────────────────────
-    var pronto: Boolean = false; private set
+    @Volatile var pronto: Boolean = false; private set
 
     // ── Callbacks para notificar quem estiver esperando ───────────────────────
     private val listeners = mutableListOf<() -> Unit>()
@@ -59,11 +80,26 @@ object ContentRepository {
         seriesPorCategoria[categoryId] ?: emptyList()
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Pré-carregamento — chamado pelo VLTVApplication
+    // Pré-carregamento — chamado pelo VLTVApplication (uma vez por processo)
     // ─────────────────────────────────────────────────────────────────────────
     fun preCarregar(context: Context) {
         if (pronto) return
+        carregarDoBanco(context)
+    }
 
+    /**
+     * ✅ NOVO: força uma releitura completa do banco para a memória,
+     * IGNORANDO o estado atual de `pronto`. Chame isso depois do login
+     * (LoginActivity), não preCarregar() — preCarregar() só funciona da
+     * primeira vez do processo; depois do login o `pronto` já pode estar
+     * `true` (com dados vazios, carregados antes do usuário logar), e
+     * preCarregar() nesse caso não faria nada.
+     */
+    fun recarregar(context: Context) {
+        carregarDoBanco(context)
+    }
+
+    private fun carregarDoBanco(context: Context) {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val dao = AppDatabase.getDatabase(context).streamDao()
