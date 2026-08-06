@@ -953,19 +953,30 @@ class PlayerActivity : AppCompatActivity() {
                else "$base/$streamType/$user/$pass/$id.$ext"
     }
 
+    // ✅ CORRIGIDO (áudio continuava tocando após fechar o PiP): antes,
+    // esse método só parava/liberava o player quando `!isInPictureInPictureMode`.
+    // O problema é que, quando o usuário fecha a telinha do PiP (botão X ou
+    // arrastando pra fora), o Android chama onStop() ANTES de sair
+    // oficialmente do modo PiP — ou seja, isInPictureInPictureMode ainda
+    // podia estar `true` nesse instante, e o player nunca era liberado.
+    // Só quando o app inteiro era fechado (processo morto) é que o
+    // onDestroy() finalmente parava o áudio.
+    //
+    // Agora usamos `isFinishing` pra diferenciar os dois casos:
+    // - Em PiP e NÃO finalizando (ex: só foi pra Home) -> mantém tocando.
+    // - Qualquer outro caso (fechou o PiP, saiu sem PiP, etc.) -> libera
+    //   o player imediatamente, o que faz o áudio parar na hora.
     override fun onStop() {
         super.onStop()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !isInPictureInPictureMode) {
-            if (activePlayer === player) activePlayer = null
-            player?.stop()
-            player?.release()
-            player = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode && !isFinishing) {
+            // Ainda em PiP e a Activity não está sendo fechada: mantém o
+            // player vivo pra continuar tocando na telinha.
+            return
         }
-        if (isFinishing) {
-            if (activePlayer === player) activePlayer = null
-            player?.release()
-            player = null
-        }
+        if (activePlayer === player) activePlayer = null
+        player?.stop()
+        player?.release()
+        player = null
     }
 
     @Suppress("DEPRECATION")
