@@ -83,8 +83,6 @@ class ProfilesActivity : AppCompatActivity() {
     // ══════════════════════════════════════════════════════════════
     // ARCO (PAINEL DE PERFIS) — raio elíptico igual Netflix
     // ══════════════════════════════════════════════════════════════
-    // Raio X = metade da largura da tela → curva suave de ponta a ponta.
-    // Raio Y = bem menor que o X → achata a curva (arco raso, não círculo).
     private val radioArcoX by lazy { resources.displayMetrics.widthPixels / 2f }
     private val radioArcoY by lazy { dpToPx(36f) }
 
@@ -110,8 +108,6 @@ class ProfilesActivity : AppCompatActivity() {
     private var rotacaoIniciada = false
     private var mostrouItemCache = false
 
-    // ✅ AJUSTE: intervalo reduzido de 7000ms → 5000ms — rotação do
-    // background um pouco mais rápida, como pedido.
     private val BG_INTERVALO_MS  = 5000L
     private val KEN_BURNS_MS     = 8000L
     private val COR_TRANSICAO_MS = 1200L
@@ -140,12 +136,6 @@ class ProfilesActivity : AppCompatActivity() {
         showShimmer(true)
         loadProfilesFromDb()
 
-        // ✅ Mostra IMEDIATAMENTE o último background exibido (salvo em
-        // cache local), sem esperar a busca no TMDB — resolve a tela
-        // preta inicial. Como a imagem provavelmente já está no disco
-        // (Glide.diskCacheStrategy(ALL) foi usado da última vez), isso
-        // costuma renderizar quase instantâneo. A busca de conteúdo
-        // fresco no TMDB continua rodando em paralelo logo abaixo.
         carregarUltimoBgItemCache()?.let { itemCache ->
             mostrouItemCache = true
             trocarBackground(itemCache)
@@ -213,17 +203,6 @@ class ProfilesActivity : AppCompatActivity() {
                             }
                             1 -> "Novo • Em cartaz agora" to "NEW"
                             else -> {
-                                // ✅ CORREÇÃO: "first_air_date" é a data de
-                                // estreia da TEMPORADA/SÉRIE em si — pra uma
-                                // série que já está no ar há anos (ex: Casa
-                                // do Dragão), essa data é antiga. Antes o
-                                // badge sempre mostrava "Estreia: dia X" com
-                                // essa data, mesmo quando já tinha passado
-                                // há muito tempo. Agora só mostra "Estreia:"
-                                // quando a data for REALMENTE futura — caso
-                                // contrário (já estreou), cai no mesmo texto
-                                // genérico usado quando não há data
-                                // ("Episódios novos toda semana").
                                 val d = item.optString("first_air_date")
                                 val dataEstreia: java.util.Date? = try {
                                     if (d.length >= 10) {
@@ -256,18 +235,10 @@ class ProfilesActivity : AppCompatActivity() {
                     }
                 } catch (e: Exception) { }
                 respostas++
-                // ✅ Antes esperava os 3 endpoints (0/1/2) responderem pra só
-                // então começar a rotação — em conexão mais lenta isso podia
-                // levar vários segundos com a tela praticamente preta. Agora
-                // começa assim que o PRIMEIRO endpoint que responder já tiver
-                // itens, sem esperar os outros dois (eles só entram no rodízio
-                // quando chegarem, normalmente).
                 if (!rotacaoIniciada && bgItems.isNotEmpty()) {
                     rotacaoIniciada = true
                     bgItems.shuffle()
                     if (mostrouItemCache) {
-                        // Já tem uma imagem em cache na tela — deixa ela um
-                        // tempo completo antes de trocar pra não "piscar".
                         handler.postDelayed(bgRotator, BG_INTERVALO_MS)
                     } else {
                         handler.post(bgRotator)
@@ -328,10 +299,6 @@ class ProfilesActivity : AppCompatActivity() {
 
                             buscarLogoTMDB(item.tmdbId, item.mediaType, item.title)
                             atualizarBadge(item)
-
-                            // ✅ Guarda esse item como "último exibido" — é o
-                            // que permite a próxima abertura da tela mostrar
-                            // algo na hora, sem esperar o TMDB responder.
                             salvarUltimoBgItemCache(item)
                         }
                         override fun onLoadCleared(placeholder: android.graphics.drawable.Drawable?) { }
@@ -339,8 +306,6 @@ class ProfilesActivity : AppCompatActivity() {
             }.start()
     }
 
-    // ✅ Cache local (SharedPreferences) do último BgItem exibido, pra tela
-    // nunca abrir "preta" esperando resposta do TMDB.
     private fun salvarUltimoBgItemCache(item: BgItem) {
         try {
             val json = JSONObject().apply {
@@ -455,26 +420,14 @@ class ProfilesActivity : AppCompatActivity() {
     }
 
     private fun aplicarPainelInicial() {
-        // ✅ Aplica o painel arredondado (o "arco") já na primeira
-        // renderização, antes mesmo do primeiro background dinâmico
-        // carregar — assim a tela nunca aparece com o painel "quadrado".
-        // IMPORTANTE: usa cor SÓLIDA (não gradiente transparente) — um
-        // canto arredondado só fica visível se a cor de dentro dele tiver
-        // contraste com o fundo. É por isso que esse painel é uma peça
-        // separada (layoutProfilesPanel), abaixo da área do título/logo
-        // (que continua com a sombra transparente de sempre, sem curva).
-        //
-        // ✅ AJUSTE: raio elíptico (X = metade da largura da tela, Y bem
-        // menor) — cria a curva de arco suave igual Netflix, em vez do
-        // canto arredondado "quadrado" (raio igual em X/Y) de antes.
         val painel = binding.layoutProfilesPanel
         val gradient = GradientDrawable()
         gradient.setColor(corAtualPainel)
         gradient.cornerRadii = floatArrayOf(
-            radioArcoX, radioArcoY,  // topo-esquerdo
-            radioArcoX, radioArcoY,  // topo-direito
-            0f, 0f,                 // baixo-direito
-            0f, 0f                  // baixo-esquerdo
+            radioArcoX, radioArcoY,
+            radioArcoX, radioArcoY,
+            0f, 0f,
+            0f, 0f
         )
         painel.background = gradient
     }
@@ -495,9 +448,6 @@ class ProfilesActivity : AppCompatActivity() {
         animator.interpolator = DecelerateInterpolator()
         animator.addUpdateListener { anim ->
             val c = anim.animatedValue as Int
-            // ✅ O "arco": raio elíptico (X grande / Y pequeno) numa cor
-            // SÓLIDA (extraída da capa via Palette) — igual ao "banco" de
-            // perfis da Netflix subindo da base da tela em curva suave.
             val gradient = GradientDrawable()
             gradient.setColor(c)
             gradient.cornerRadii = floatArrayOf(
@@ -570,15 +520,12 @@ class ProfilesActivity : AppCompatActivity() {
 
     private fun showShimmer(show: Boolean) {
         if (show) binding.rvProfiles.alpha = 0f
-        // ✅ Duração reduzida de 350ms → 120ms, transição ainda mais rápida.
         else binding.rvProfiles.animate().alpha(1f).setDuration(120)
             .setInterpolator(DecelerateInterpolator()).start()
     }
 
     private fun setupRecyclerView() {
         adapter = ProfileAdapter(listaPerfis)
-        // ✅ Trocado de grid (4 colunas) pra fileira horizontal única e
-        // centralizada — igual ao layout de seleção de perfil da Netflix.
         binding.rvProfiles.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
         binding.rvProfiles.adapter       = adapter
         binding.rvProfiles.itemAnimator  = null
@@ -588,7 +535,28 @@ class ProfilesActivity : AppCompatActivity() {
         if (isCreating) return
         lifecycleScope.launch {
             mutex.withLock {
-                val perfis = withContext(Dispatchers.IO) { db.streamDao().getAllProfiles() }
+                val perfis = withContext(Dispatchers.IO) {
+                    val lista = db.streamDao().getAllProfiles()
+
+                    // ✅ AUTO-CORREÇÃO (self-heal): perfis criados ANTES dessa
+                    // correção podem ter nome "Infantil"/"Kids" mas isKids
+                    // ainda em false (era o bug: detecção só pelo nome).
+                    // Aqui a gente corrige isso UMA VEZ, escrevendo isKids=true
+                    // no banco pra esses casos. Só ELEVA (false→true) baseado
+                    // no nome atual — nunca reverte um perfil que já é Kids
+                    // pra não-Kids, então depois disso o nome pode ser mudado
+                    // livremente (ex: "Infantil" → "Vinícius") sem perder o
+                    // status de Kids, porque a flag no banco passa a mandar.
+                    lista.map { p ->
+                        val pareceKidsPeloNome = p.name.contains("infantil", ignoreCase = true) ||
+                                                  p.name.contains("kids", ignoreCase = true)
+                        if (pareceKidsPeloNome && !p.isKids) {
+                            val corrigido = p.copy(isKids = true)
+                            db.streamDao().updateProfile(corrigido)
+                            corrigido
+                        } else p
+                    }
+                }
                 if (perfis.isEmpty()) createDefaultProfiles()
                 else {
                     listaPerfis.clear(); listaPerfis.addAll(perfis)
@@ -603,9 +571,6 @@ class ProfilesActivity : AppCompatActivity() {
     }
 
     private fun animateCardsIn() {
-        // ✅ Entrada dos cards ainda mais rápida (duração e delay reduzidos
-        // de novo) — sem "quique" (Overshoot trocado por Decelerate),
-        // igual à transição enxuta da Netflix.
         binding.rvProfiles.post {
             val lm = binding.rvProfiles.layoutManager as LinearLayoutManager
             for (i in lm.findFirstVisibleItemPosition()..lm.findLastVisibleItemPosition()) {
@@ -620,13 +585,15 @@ class ProfilesActivity : AppCompatActivity() {
 
     private suspend fun createDefaultProfiles() {
         isCreating = true
-        // ✅ Agora só 3 perfis padrão, igual à Netflix: "Perfil 1", "Perfil 2"
-        // e "Infantil" — esse último já entra automaticamente no modo Kids
-        // (ver SessionManager/click do adapter, que detecta "infantil" no nome).
+        // ✅ "Infantil" agora nasce com isKids = true FIXO no banco — não
+        // depende mais do nome. Léo pode renomear pra "Vinícius" depois
+        // (via editProfileName) que o status de Kids não muda, porque
+        // editProfileName só copia o nome (perfil.copy(name = novoNome)),
+        // preservando isKids.
         val padrao = listOf(
             ProfileEntity(name = "Perfil 1", imageUrl = defaultAvatarId1),
             ProfileEntity(name = "Perfil 2", imageUrl = defaultAvatarId2),
-            ProfileEntity(name = "Infantil", imageUrl = defaultAvatarIdInfantil)
+            ProfileEntity(name = "Infantil", imageUrl = defaultAvatarIdInfantil, isKids = true)
         )
         withContext(Dispatchers.IO) {
             if (db.streamDao().getAllProfiles().isEmpty())
@@ -653,6 +620,10 @@ class ProfilesActivity : AppCompatActivity() {
             val nome = etNome.text.toString().trim()
             if (nome.isNotEmpty()) {
                 lifecycleScope.launch(Dispatchers.IO) {
+                    // ✅ Perfis criados manualmente pelo "+" são sempre
+                    // adultos (isKids = false, valor padrão) — só os 3
+                    // perfis pré-definidos têm a opção de ser Kids por
+                    // enquanto.
                     db.streamDao().insertProfile(ProfileEntity(name = nome, imageUrl = defaultAvatarId1))
                     withContext(Dispatchers.Main) { loadProfilesFromDb() }
                 }
@@ -683,10 +654,22 @@ class ProfilesActivity : AppCompatActivity() {
             bottomSheet.dismiss()
             editProfileName(perfil)
         }
-        view.findViewById<View>(R.id.optionTrocarAvatar).setOnClickListener {
-            bottomSheet.dismiss()
-            openAvatarSelection(perfil)
+
+        // ✅ Perfil Kids não pode trocar avatar — fica com o avatar fixo
+        // (av_infantil), pra não misturar com o catálogo de avatares dos
+        // perfis adultos (Marvel/DC/Disney/etc). A opção some da lista
+        // em vez de aparecer desabilitada.
+        val optionTrocarAvatar = view.findViewById<View>(R.id.optionTrocarAvatar)
+        if (perfil.isKids) {
+            optionTrocarAvatar.visibility = View.GONE
+        } else {
+            optionTrocarAvatar.visibility = View.VISIBLE
+            optionTrocarAvatar.setOnClickListener {
+                bottomSheet.dismiss()
+                openAvatarSelection(perfil)
+            }
         }
+
         view.findViewById<View>(R.id.optionExcluirPerfil).setOnClickListener {
             bottomSheet.dismiss()
             confirmarExclusao(perfil)
@@ -704,8 +687,6 @@ class ProfilesActivity : AppCompatActivity() {
         val view = layoutInflater.inflate(R.layout.bottom_sheet_editar_nome, null)
         bottomSheet.setContentView(view)
 
-        // Expande o sheet completamente e usa ADJUST_PAN para subir
-        // a janela inteira quando o teclado aparece — campo sempre visível
         bottomSheet.behavior.apply {
             skipCollapsed = true
             state = BottomSheetBehavior.STATE_EXPANDED
@@ -725,6 +706,8 @@ class ProfilesActivity : AppCompatActivity() {
         btnSalvar.setOnClickListener {
             val novoNome = etNome.text.toString().trim()
             if (novoNome.isNotEmpty()) {
+                // ✅ perfil.copy(name = novoNome) preserva isKids automaticamente
+                // — renomear "Infantil" pra "Vinícius" NÃO tira o status Kids.
                 updateProfileInDb(perfil.copy(name = novoNome))
                 bottomSheet.dismiss()
             } else {
@@ -801,8 +784,6 @@ class ProfilesActivity : AppCompatActivity() {
         val canvas = Canvas(output)
         val paint  = Paint(Paint.ANTI_ALIAS_FLAG)
 
-        // ✅ Máscara trocada de círculo pra quadrado com cantos arredondados
-        // — visual igual aos avatares de perfil da Netflix.
         val raio = size * 0.22f
         val rect = android.graphics.RectF(0f, 0f, size.toFloat(), size.toFloat())
         canvas.drawRoundRect(rect, raio, raio, paint)
@@ -851,9 +832,6 @@ class ProfilesActivity : AppCompatActivity() {
                         .putString("last_profile_name", perfil.name)
                         .putString("last_profile_icon", icon).apply()
 
-                    // ✅ Dispara a transição pra próxima tela: fade simples
-                    // pra perfis normais, e a animação especial colorida
-                    // apenas para o perfil Infantil.
                     transicionarParaPerfil(holder.b.ivProfileAvatar, perfil, icon)
                 }.start()
             }
@@ -874,18 +852,13 @@ class ProfilesActivity : AppCompatActivity() {
     }
 
     // ══════════════════════════════════════════════════════════════
-    // ✅ AJUSTADO: transição do avatar crescendo até o centro foi removida
-    // para perfis normais — ficava estranha "parando no meio da tela" sem
-    // um destino visual real (o ícone de perfil no rodapé fica em outra
-    // Activity, HomeActivity, que ainda nem existe quando essa animação
-    // começa aqui em ProfilesActivity, então não dá pra mirar nele).
-    // Perfis normais agora fazem apenas um fade rápido e direto.
-    // A transição especial (avatar crescendo + fundo colorido + palavra
-    // "INFANTIL") continua existindo SOMENTE para o perfil Infantil.
+    // TRANSIÇÃO DE PERFIL
     // ══════════════════════════════════════════════════════════════
     private fun transicionarParaPerfil(avatarOrigemView: ImageView, perfil: ProfileEntity, icon: String) {
-        val ehPerfilInfantil = perfil.name.contains("infantil", ignoreCase = true) ||
-                               perfil.name.contains("kids", ignoreCase = true)
+        // ✅ CORREÇÃO PRINCIPAL: agora usa perfil.isKids (campo fixo no
+        // banco, definido na criação do perfil) em vez de checar o nome.
+        // Renomear "Infantil" pra "Vinícius" não muda mais esse resultado.
+        val ehPerfilInfantil = perfil.isKids
 
         val rootOverlay = binding.root as ViewGroup
 
@@ -914,10 +887,8 @@ class ProfilesActivity : AppCompatActivity() {
             return
         }
 
-        // ── Perfil Infantil: mantém a transição especial (avatar crescendo
-        // no centro + fundo colorido + palavra "INFANTIL") ────────────────
+        // ── Perfil Infantil: transição especial ────────────────
 
-        // Posição do avatar de origem relativa ao root (não à janela inteira)
         val locOrigem = IntArray(2)
         avatarOrigemView.getLocationInWindow(locOrigem)
         val locRoot = IntArray(2)
@@ -957,7 +928,6 @@ class ProfilesActivity : AppCompatActivity() {
         }
         overlay.addView(avatarClone)
 
-        // "INFANTIL" aparece surgindo por baixo do avatar já centralizado.
         val tvLogoInfantil = TextView(this).apply {
             text = "INFANTIL"
             setTextColor(Color.WHITE)
@@ -977,7 +947,6 @@ class ProfilesActivity : AppCompatActivity() {
 
         rootOverlay.addView(overlay)
 
-        // Esconde o resto da tela de perfis por trás do overlay
         binding.rvProfiles.animate().alpha(0f).setDuration(180).start()
         binding.tvDynamicTitle.animate().alpha(0f).setDuration(180).start()
         binding.imgDynamicLogo.animate().alpha(0f).setDuration(180).start()
