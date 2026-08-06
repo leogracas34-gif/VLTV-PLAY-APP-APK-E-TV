@@ -1099,4 +1099,3 @@ class PlayerActivity : AppCompatActivity() {
         private val PIP_CLOSE_TOKEN = Any()
     }
 }
-
