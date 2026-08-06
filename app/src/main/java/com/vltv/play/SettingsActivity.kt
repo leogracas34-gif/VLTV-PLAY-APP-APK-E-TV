@@ -52,6 +52,12 @@ class SettingsActivity : AppCompatActivity() {
     private var currentProfileIcon: String? = null
     private val tmdbApiKey = "9b73f5dd15b8165b1b57419be2f29128"
 
+    // ✅ NOVO: guarda a última lista de perfis carregada do banco (usada por
+    // perfilAtualEhKids() pra saber se o perfil ATUALMENTE ativo é Kids —
+    // sem isso, só teríamos o NOME do perfil ativo vindo do Intent, e
+    // voltaríamos a cair no bug de checar por nome).
+    private var listaPerfisAtual: List<ProfileEntity> = emptyList()
+
     // ✅ Links oficiais exibidos na tela "Sobre o Aplicativo"
     private val SITE_URL = "https://vltvplay.tech"
     private val INSTAGRAM_USERNAME = "vltv_play"
@@ -1228,10 +1234,35 @@ class SettingsActivity : AppCompatActivity() {
         carregarPerfis()
     }
 
+    // ✅ NOVO: descobre se o perfil ATUALMENTE ativo (currentProfileName) é
+    // Kids, consultando o campo isKids do último snapshot de perfis
+    // carregado do banco — em vez de checar o NOME. Usado por
+    // trocarPerfilAtivo() pra decidir se precisa pedir o PIN de Perfis antes
+    // de sair da Área Infantil.
+    private fun perfilAtualEhKids(): Boolean =
+        listaPerfisAtual.find { it.name == currentProfileName }?.isKids ?: false
+
     private fun carregarPerfis() {
         lifecycleScope.launch(Dispatchers.IO) {
-            val perfis = database.streamDao().getAllProfiles()
+            val bruto = database.streamDao().getAllProfiles()
+
+            // ✅ Mesma auto-correção (self-heal) aplicada na ProfilesActivity:
+            // eleva isKids de false→true quando o NOME já indica um perfil
+            // infantil mas o campo no banco ainda não foi migrado. NUNCA
+            // reverte true→false — depois disso, renomear
+            // "Infantil"→"Vinícius" não perde mais o status de Kids.
+            val perfis = bruto.map { p ->
+                val pareceKidsPeloNome = p.name.contains("infantil", ignoreCase = true) ||
+                                          p.name.contains("kids", ignoreCase = true)
+                if (pareceKidsPeloNome && !p.isKids) {
+                    val corrigido = p.copy(isKids = true)
+                    database.streamDao().updateProfile(corrigido)
+                    corrigido
+                } else p
+            }
+
             withContext(Dispatchers.Main) {
+                listaPerfisAtual = perfis
                 // ✅ NOVO: adapter agora recebe também o clique do item
                 // "Criar perfil" (círculo tracejado com "+"), sempre
                 // exibido como último item da fileira.
@@ -1333,8 +1364,16 @@ class SettingsActivity : AppCompatActivity() {
             root.addView(divider())
         }
         root.addView(opcao("✏️", "Editar nome") { editarNomePerfil(perfil) })
-        root.addView(divider())
-        root.addView(opcao("🖼️", "Trocar avatar") { trocarAvatarPerfil(perfil) })
+
+        // ✅ CORREÇÃO: perfil Kids não pode trocar avatar — fica com o
+        // avatar fixo (av_infantil), mesma regra já aplicada na
+        // ProfilesActivity. Antes essa opção aparecia pra QUALQUER perfil
+        // aqui em Configurações, inclusive o Infantil.
+        if (!perfil.isKids) {
+            root.addView(divider())
+            root.addView(opcao("🖼️", "Trocar avatar") { trocarAvatarPerfil(perfil) })
+        }
+
         if (!isAtivo) {
             root.addView(divider())
             root.addView(opcao("🗑️", "Excluir perfil", Color.parseColor("#FF5252")) {
@@ -1362,17 +1401,21 @@ class SettingsActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    // ✅ CORREÇÃO DE SEGURANÇA (2ª camada): mesmo com o roteamento por nome já
-    // certo (perfil "Infantil" sempre abre KidsActivity), faltava travar o
-    // caminho INVERSO — sair do perfil Infantil por aqui, dentro de
-    // Configurações, sem pedir nada. Agora, se o perfil ATUAL for Infantil e
-    // o ESCOLHIDO não for, e o ProfileSwitchPinManager estiver ativado, pede
-    // o PIN de perfis antes de trocar de verdade.
+    // ✅ CORREÇÃO DE SEGURANÇA (2ª camada): mesmo com o roteamento por
+    // isKids já certo (perfil Infantil sempre abre KidsActivity), faltava
+    // travar o caminho INVERSO — sair do perfil Infantil por aqui, dentro
+    // de Configurações, sem pedir nada. Agora, se o perfil ATUAL for Kids
+    // (via perfilAtualEhKids()) e o ESCOLHIDO não for, e o
+    // ProfileSwitchPinManager estiver ativado, pede o PIN de perfis antes
+    // de trocar de verdade.
+    //
+    // ✅ CORREÇÃO PRINCIPAL: antes essa checagem era feita pelo NOME
+    // (contains("infantil")/"kids"), o que quebrava assim que o perfil
+    // Infantil era renomeado (ex: "Infantil" → "Vinícius"). Agora usa o
+    // campo fixo isKids — tanto do perfil atual quanto do perfil destino.
     private fun trocarPerfilAtivo(perfil: ProfileEntity) {
-        val ehPerfilInfantilAtual = currentProfileName.contains("infantil", ignoreCase = true) ||
-                                     currentProfileName.contains("kids", ignoreCase = true)
-        val ehPerfilInfantilDestino = perfil.name.contains("infantil", ignoreCase = true) ||
-                                       perfil.name.contains("kids", ignoreCase = true)
+        val ehPerfilInfantilAtual = perfilAtualEhKids()
+        val ehPerfilInfantilDestino = perfil.isKids
 
         if (ehPerfilInfantilAtual && !ehPerfilInfantilDestino && ProfileSwitchPinManager.isEnabled(this)) {
             pedirPinTrocaPerfil(
@@ -1399,12 +1442,10 @@ class SettingsActivity : AppCompatActivity() {
         SessionManager.marcarSessaoAtiva()
         mostrarToastPremium("Perfil alterado para ${perfil.name}")
 
-        // ✅ Roteamento por nome — perfil "Infantil"/"Kids" sempre abre a
-        // KidsActivity, nunca a Home normal.
-        val ehPerfilInfantil = perfil.name.contains("infantil", ignoreCase = true) ||
-                               perfil.name.contains("kids", ignoreCase = true)
-
-        val destino = if (ehPerfilInfantil) KidsActivity::class.java else HomeActivity::class.java
+        // ✅ CORREÇÃO: roteamento agora usa o campo fixo perfil.isKids em
+        // vez do NOME do perfil — renomear "Infantil"→"Vinícius" não muda
+        // mais o destino da navegação.
+        val destino = if (perfil.isKids) KidsActivity::class.java else HomeActivity::class.java
 
         startActivity(Intent(this, destino).apply {
             putExtra("PROFILE_NAME", perfil.name)
@@ -1423,6 +1464,8 @@ class SettingsActivity : AppCompatActivity() {
         ) { novoNome ->
             if (novoNome.isBlank()) { mostrarToastPremium("O nome não pode ficar em branco"); return@mostrarDialogInput }
             lifecycleScope.launch(Dispatchers.IO) {
+                // ✅ perfil.copy(name = novoNome) preserva isKids automaticamente
+                // — renomear o perfil Infantil não tira mais o status Kids.
                 val perfilAtualizado = perfil.copy(name = novoNome)
                 database.streamDao().updateProfile(perfilAtualizado)
                 if (perfil.name == currentProfileName) {
@@ -1651,12 +1694,15 @@ class SettingsActivity : AppCompatActivity() {
 
     // ✅ Pede o nome depois que o tipo já foi escolhido. Pro perfil Infantil,
     // pré-preenche com "Infantil" (pode editar) e usa o avatar padrão do
-    // Infantil (av_infantil, mesmo usado nos perfis de fábrica). Garante que
-    // o nome final contenha "infantil"/"kids" — é assim que TODO o app
-    // (SettingsActivity, LoginActivity, ProfilesActivity, KidsActivity)
-    // reconhece um perfil como infantil e decide abrir a KidsActivity em vez
-    // da Home normal; sem essa palavra no nome, o roteamento automático não
-    // funcionaria mesmo com o avatar certo.
+    // Infantil (av_infantil, mesmo usado nos perfis de fábrica).
+    //
+    // ✅ CORREÇÃO PRINCIPAL: agora grava isKids = ehInfantil DIRETO no banco
+    // — antes essa flag nunca era setada aqui, só o nome ganhava a palavra
+    // "Infantil"/"Kids" (texto), e era só esse texto que o resto do app
+    // (SettingsActivity, ProfilesActivity, KidsActivity) usava pra
+    // reconhecer o perfil como infantil. Mantemos o texto no nome por
+    // clareza visual, mas quem manda agora é o campo isKids — renomear o
+    // perfil depois não muda mais o comportamento dele.
     private fun mostrarDialogNomeNovoPerfil(ehInfantil: Boolean) {
         mostrarDialogInput(
             titulo       = if (ehInfantil) "Criar Perfil Infantil" else "Criar Perfil",
@@ -1672,7 +1718,9 @@ class SettingsActivity : AppCompatActivity() {
             val avatarPadrao = if (ehInfantil) "av_infantil" else "av_iron_man"
 
             lifecycleScope.launch(Dispatchers.IO) {
-                database.streamDao().insertProfile(ProfileEntity(name = nomeFinal, imageUrl = avatarPadrao))
+                database.streamDao().insertProfile(
+                    ProfileEntity(name = nomeFinal, imageUrl = avatarPadrao, isKids = ehInfantil)
+                )
                 withContext(Dispatchers.Main) {
                     mostrarToastPremium("Perfil criado ✓")
                     carregarPerfis()
