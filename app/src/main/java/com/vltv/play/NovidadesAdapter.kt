@@ -33,19 +33,26 @@ class NovidadesAdapter(
 ) : RecyclerView.Adapter<NovidadesAdapter.VH>() {
 
     // ── OkHttpClient dedicado para logos — conexões persistentes, timeout curto ──
-    // CORREÇÃO: substituído URL().readText() por OkHttp com pool — igual às outras telas
     private val logoClient = OkHttpClient.Builder()
         .connectTimeout(4, TimeUnit.SECONDS)
         .readTimeout(4, TimeUnit.SECONDS)
         .connectionPool(okhttp3.ConnectionPool(8, 30, TimeUnit.SECONDS))
         .build()
 
-    // CORREÇÃO: semáforo de 3 → 6 — permite mais buscas paralelas de logo
-    // Com 20 itens visíveis, 3 era gargalo; 6 equilibra throughput e memória
     private val logoSemaphore = kotlinx.coroutines.sync.Semaphore(6)
 
     // ── Scope vinculado ao adapter — cancela tudo quando adapter é descartado ──
     private val adapterScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    // CORREÇÃO (trava/carregamento lento da aba Novidades): valor sentinela
+    // gravado no cache quando o TMDB não tem logo para o item. Antes, um
+    // "não encontrei logo" não era salvo em lugar nenhum, então TODO holder
+    // sem logo refazia a chamada de rede /images toda vez que era religado
+    // (ex: ao rolar a lista pra cima e voltar), multiplicando chamadas
+    // simultâneas e travando o preenchimento da tela. Agora o "não tem logo"
+    // também é cacheado, então cada item só bate na rede UMA vez na vida
+    // do app (ou até o cache ser limpo).
+    private val LOGO_AUSENTE = "__SEM_LOGO__"
 
     class VH(view: View) : RecyclerView.ViewHolder(view) {
         val imgFundo: ImageView           = view.findViewById(R.id.imgFundoNovidade)
@@ -65,8 +72,6 @@ class NovidadesAdapter(
     fun atualizarMapas(vods: Map<String, VodEntity>, series: Map<String, SeriesEntity>) {
         vodsMap   = vods
         seriesMap = series
-        // CORREÇÃO: notifyItemRangeChanged em vez de notifyDataSetChanged
-        // Evita redesenho completo + preserva animações do RecyclerView
         notifyItemRangeChanged(0, lista.size)
     }
 
@@ -104,7 +109,13 @@ class NovidadesAdapter(
 
         // ── Logo: cache SharedPreferences → zero latência ────────────────────
         val cachedLogo = logoPrefs.getString("novidade_logo_${item.idTMDB}", null)
-        if (cachedLogo != null) {
+
+        // CORREÇÃO: trata o valor sentinela "sem logo" — não mostra imagem
+        // nem dispara rede, só usa o título como já era feito no caso "sem cache"
+        if (cachedLogo == LOGO_AUSENTE) {
+            holder.tvTitulo.visibility = View.VISIBLE
+            holder.imgLogo.visibility  = View.GONE
+        } else if (cachedLogo != null) {
             holder.tvTitulo.visibility = View.GONE
             holder.imgLogo.visibility  = View.VISIBLE
             Glide.with(context)
@@ -113,7 +124,7 @@ class NovidadesAdapter(
                 .dontAnimate()
                 .into(holder.imgLogo)
         } else {
-            // Sem cache: título texto visível imediatamente, logo vem em background
+            // Sem cache (nunca buscado): título texto visível imediatamente, logo vem em background
             holder.tvTitulo.visibility = View.VISIBLE
             holder.imgLogo.visibility  = View.GONE
         }
@@ -130,7 +141,11 @@ class NovidadesAdapter(
 
         aplicarDisponibilidade(holder, item, context, serieLocal, filmeLocal)
 
-        // ── Busca logo em background somente se não estava em cache ──────────
+        // ── Busca logo em background somente se NUNCA foi buscado antes ──────
+        // CORREÇÃO: antes a condição era `cachedLogo == null`, o que incluía
+        // o caso "já busquei e não tinha logo" (porque esse caso nunca era
+        // salvo). Agora esse caso vira LOGO_AUSENTE no cache e cai fora daqui,
+        // então a rede só é chamada de fato na primeira vez que o item aparece.
         if (cachedLogo == null) {
             val idCapturado = item.idTMDB
             holder.job = adapterScope.launch {
@@ -140,7 +155,7 @@ class NovidadesAdapter(
                     val logoUrl = buscarLogoTMDB(idCapturado, item.isSerie, logoPrefs)
                     if (logoUrl != null && isActive) {
                         withContext(Dispatchers.Main) {
-                            // CORREÇÃO: verifica tmdbIdAtual em vez de adapterPosition
+                            // verifica tmdbIdAtual em vez de adapterPosition
                             // adapterPosition pode ser -1 quando holder está em transição
                             if (holder.tmdbIdAtual == idCapturado) {
                                 holder.tvTitulo.visibility = View.GONE
@@ -153,6 +168,8 @@ class NovidadesAdapter(
                             }
                         }
                     }
+                    // Se logoUrl == null, buscarLogoTMDB já cuidou de gravar
+                    // LOGO_AUSENTE no cache — não precisa fazer nada aqui.
                 } finally {
                     logoSemaphore.release()
                 }
@@ -282,8 +299,9 @@ class NovidadesAdapter(
         return n.trim().replace(Regex("\\s+"), " ")
     }
 
-    // CORREÇÃO: substituído URL().readText() por OkHttp — mesmo client das outras telas
-    // Reduz latência de ~800ms → ~150ms por logo (reutiliza conexões TCP abertas)
+    // CORREÇÃO: agora grava LOGO_AUSENTE no cache quando não encontra logo,
+    // em vez de simplesmente retornar null sem persistir nada. Isso é o que
+    // impede o re-fetch infinito descrito acima.
     private suspend fun buscarLogoTMDB(
         tmdbId: Int,
         isSerie: Boolean,
@@ -300,7 +318,12 @@ class NovidadesAdapter(
             response.close()
 
             val logos = JSONObject(body).optJSONArray("logos") ?: return null
-            if (logos.length() == 0) return null
+            if (logos.length() == 0) {
+                // CORREÇÃO: sem logo disponível — cacheia o sentinela pra
+                // nunca mais bater nessa API pra esse id.
+                prefs.edit().putString("novidade_logo_$tmdbId", LOGO_AUSENTE).apply()
+                return null
+            }
 
             // Prioridade: pt → en → qualquer um
             var path: String? = null
@@ -320,6 +343,10 @@ class NovidadesAdapter(
             prefs.edit().putString("novidade_logo_$tmdbId", finalUrl).apply()
             finalUrl
         } catch (e: Exception) {
+            // CORREÇÃO: erro de rede/parse — NÃO cacheia LOGO_AUSENTE aqui de
+            // propósito, pois pode ser falha temporária (timeout, sem
+            // internet); nesse caso deve tentar de novo na próxima vez que
+            // o item for religado, diferente de "TMDB confirmou que não tem logo".
             null
         }
     }
