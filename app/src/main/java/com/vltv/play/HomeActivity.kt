@@ -230,13 +230,21 @@ class HomeActivity : AppCompatActivity() {
                 carregarDadosLocaisImediato()
             }
 
-            SyncManager.sincronizarSeNecessario(applicationContext)
-            SyncManager.iniciarSyncPeriodica(applicationContext)
+            // ✅ CORREÇÃO: o listener é registrado ANTES de disparar o sync.
+            // Antes, sincronizarSeNecessario()/iniciarSyncPeriodica() eram chamados
+            // primeiro e só depois vinha registrarOuvinteNovidade() — se o sync
+            // terminasse rápido (ou o Mutex do SyncManager já barrasse por já ter
+            // rodado nesta sessão), a notificação de "dados prontos" podia disparar
+            // antes de existir alguém ouvindo, e se perdia — a Home ficava esperando
+            // um evento que já tinha passado, só se recuperando ao fechar e reabrir
+            // o app (quando o listener já estava registrado antes do sync rodar de novo).
             removerOuvinteSync = SyncManager.registrarOuvinteNovidade {
                 if (!isFinishing && !isDestroyed) {
                     popularTelaDoRepositorio()
                 }
             }
+            SyncManager.sincronizarSeNecessario(applicationContext)
+            SyncManager.iniciarSyncPeriodica(applicationContext)
 
         } catch (e: Exception) {
             e.printStackTrace()
