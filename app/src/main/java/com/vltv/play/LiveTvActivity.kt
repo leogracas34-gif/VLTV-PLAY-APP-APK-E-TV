@@ -1,11 +1,18 @@
 package com.vltv.play
 
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Base64
+import android.util.Rational
 import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.LayoutInflater
@@ -96,6 +103,13 @@ class LiveTvActivity : AppCompatActivity() {
 
     private var csMini: ConstraintSet = ConstraintSet()
     private var csExpanded: ConstraintSet = ConstraintSet()
+
+    private val handler = Handler(Looper.getMainLooper())
+
+    // ✅ NOVO: mesmo mecanismo usado no PlayerActivity pra resolver o X
+    // do PiP não encerrando o áudio. Ver explicação completa nos
+    // comentários do onStop()/onPictureInPictureModeChanged() lá embaixo.
+    private var pipFechamentoSuspeito = false
 
     // ✅ Zoom = os mesmos 3 modos nativos que existiam no PlayerActivity
     // (Ajustar / Zoom / Preencher), agora acionados por gesto de pinça em
@@ -244,6 +258,76 @@ class LiveTvActivity : AppCompatActivity() {
 
         rvCategories.requestFocus()
         carregarCategorias()
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  PICTURE-IN-PICTURE
+    // ═══════════════════════════════════════════════════════════════
+    // ✅ NOVO: antes essa tela não tinha PiP nativo nenhum — só um mini
+    // player interno (a troca de ConstraintSet mini/expandido), que só
+    // funciona DENTRO do próprio app. Ao sair do app (Home, trocar de
+    // app, etc.), o Android chamava onStop() e o player só pausava. Agora,
+    // igual no PlayerActivity, entra na telinha PiP do sistema quando o
+    // usuário sai do app com um canal tocando.
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && player?.isPlaying == true) {
+            val params = PictureInPictureParams.Builder()
+                .setAspectRatio(Rational(16, 9))
+                .build()
+            enterPictureInPictureMode(params)
+        }
+    }
+
+    // ✅ NOVO: mesma lógica do PlayerActivity pra resolver o X do PiP.
+    // Resumo: o Android chama onStop() tanto quando o usuário toca no X
+    // do PiP quanto quando ele só vai pra Home com o PiP ainda aberto —
+    // não dá pra diferenciar os dois só ali. A diferença aparece um
+    // instante depois: se foi o X, o sistema chama em seguida
+    // onPictureInPictureModeChanged(false, ...) avisando que saiu do PiP
+    // de vez. Por isso: onStop() só marca a suspeita, e é aqui que
+    // confirmamos (ou descartamos, no onStart()) o fechamento real.
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+
+        if (isInPictureInPictureMode) {
+            // Entrando no PiP: some com tudo, deixa só o vídeo na telinha.
+            sidebarViews().forEach { it.visibility = View.GONE }
+            playerMiniInfoBar.visibility = View.GONE
+            expandedInfoBar.visibility = View.GONE
+            playerView.useController = false
+            return
+        }
+
+        // Saindo do PiP.
+        if (pipFechamentoSuspeito) {
+            // Confirmado: foi o X — encerra o canal e fecha a tela.
+            encerrarPorFechamentoDoPip()
+            return
+        }
+
+        // Voltou ao app normalmente (maximizou o PiP tocando na telinha).
+        // Restaura conforme o estado em que estava antes: mini ou
+        // expandido.
+        playerView.useController = true
+        if (isExpanded) {
+            sidebarViews().forEach { it.visibility = View.GONE }
+            playerMiniInfoBar.visibility = View.GONE
+        } else {
+            sidebarViews().forEach { it.visibility = View.VISIBLE }
+            playerMiniInfoBar.visibility = View.VISIBLE
+        }
+    }
+
+    // ✅ NOVO: encerra de vez quando confirmado que foi o X do PiP —
+    // pausa/libera o player e fecha a Activity (canal ao vivo não tem
+    // posição pra "continuar de onde parou" como filme/série).
+    private fun encerrarPorFechamentoDoPip() {
+        if (!pipFechamentoSuspeito && isFinishing) return
+        pipFechamentoSuspeito = false
+        handler.removeCallbacksAndMessages(PIP_CLOSE_TOKEN)
+        player?.pause()
+        if (!isFinishing) finish()
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -1000,14 +1084,58 @@ class LiveTvActivity : AppCompatActivity() {
         return super.onKeyDown(keyCode, event)
     }
 
+    // ✅ CORRIGIDO (canal travado ao voltar pro app): antes o onStart()
+    // nem existia aqui — só o onStop() pausando o player. Resultado: ao
+    // voltar pro app (reabrir pela recents, ou voltar de outra tela),
+    // ninguém mandava o player tocar de novo, então ficava parado
+    // ("travado") na imagem do último frame antes de pausar.
+    //
+    // Também é aqui que descartamos a suspeita de fechamento do PiP (ver
+    // onStop()/onPictureInPictureModeChanged()) quando a Activity volta
+    // ao normal sem confirmação de que foi o X.
+    override fun onStart() {
+        super.onStart()
+        pipFechamentoSuspeito = false
+        handler.removeCallbacksAndMessages(PIP_CLOSE_TOKEN)
+
+        val p = player ?: return
+        // Só retoma se o player já tinha um conteúdo carregado (não
+        // READY/BUFFERING/ENDED por engano em outros estados).
+        if (p.playbackState == Player.STATE_READY || p.playbackState == Player.STATE_BUFFERING) {
+            p.play()
+        }
+    }
+
+    // ✅ CORRIGIDO: mesmo princípio do PlayerActivity. Se ainda está em
+    // PiP e não está finalizando, pode ser "foi pra Home" (mantém
+    // tocando) OU o X acabou de ser tocado — só marca a suspeita aqui;
+    // quem confirma é o onPictureInPictureModeChanged() ou, na falta
+    // dele (alguns fabricantes atrasam/pulam o callback), o postAtTime
+    // de segurança abaixo (~800ms).
     override fun onStop() {
         super.onStop()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode && !isFinishing) {
+            pipFechamentoSuspeito = true
+            handler.postAtTime({
+                if (pipFechamentoSuspeito) encerrarPorFechamentoDoPip()
+            }, PIP_CLOSE_TOKEN, SystemClock.uptimeMillis() + 800L)
+            return
+        }
+        pipFechamentoSuspeito = false
         player?.pause()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        handler.removeCallbacksAndMessages(PIP_CLOSE_TOKEN)
         player?.release()
         player = null
+    }
+
+    companion object {
+        // ✅ NOVO: token só pra identificar/cancelar o Runnable de
+        // segurança do fechamento do PiP no Handler, sem mexer em outros
+        // postDelayed que essa Activity venha a ter no futuro.
+        private val PIP_CLOSE_TOKEN = Any()
     }
 }
