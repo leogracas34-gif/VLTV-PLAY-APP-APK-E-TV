@@ -81,31 +81,6 @@ class PlayerActivity : AppCompatActivity() {
     private var offlineUri: String? = null
     private var offlineUrl: String? = null
 
-    // ✅ NOVO: resolve o bug do X do PiP não encerrar o áudio.
-    //
-    // O problema: quando o usuário toca no X da telinha de
-    // Picture-in-Picture, o Android NÃO chama finish() e não manda
-    // nenhum aviso direto de "fechou o PiP". Ele só chama onStop() — a
-    // MESMA chamada que aconteceria se o app só tivesse ido pra Home
-    // (nesse caso continua tocando, o que é o comportamento certo).
-    // Ou seja: só com onStop() sozinho é IMPOSSÍVEL diferenciar
-    // "fechou o PiP no X" de "só minimizou".
-    //
-    // A diferença aparece um instante depois: quando é o X, o sistema
-    // chama, em seguida, onPictureInPictureModeChanged(false, ...)
-    // avisando que saiu do modo PiP (porque a telinha sumiu de vez).
-    // Quando é só ida pra Home normal, esse callback NÃO é chamado nessa
-    // sequência (o app continua em PiP, isInPictureInPictureMode
-    // continua true).
-    //
-    // Então: em onStop(), se ainda estamos em PiP, marcamos uma flag
-    // "suspeita de fechamento" em vez de liberar o player na hora. Se o
-    // onPictureInPictureModeChanged(false, ...) chegar confirmando que
-    // saiu do PiP, aí sim consideramos fechado de verdade e liberamos
-    // o player + finish(). Se não chegar (o usuário só voltou a
-    // interagir com o app normalmente), a flag é zerada em onStart().
-    private var pipFechamentoSuspeito = false
-
     // MOCHILA DE EPISODIOS (agora cobre TODAS as temporadas da série, em
     // ordem — é o que permite navegar de uma temporada pra outra sem
     // travar no último episódio).
@@ -352,9 +327,6 @@ class PlayerActivity : AppCompatActivity() {
         super.onUserLeaveHint()
     }
 
-    // ✅ CORRIGIDO: aqui é onde confirmamos (ou descartamos) a suspeita de
-    // fechamento pelo X, marcada lá no onStop(). Ver explicação completa
-    // no comentário do campo `pipFechamentoSuspeito` lá em cima.
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         if (isInPictureInPictureMode) {
@@ -363,47 +335,10 @@ class PlayerActivity : AppCompatActivity() {
             loading.visibility = View.GONE
             nextEpisodeContainer.visibility = View.GONE
             tvSeasonEndWarning.visibility = View.GONE
-            return
+        } else {
+            playerView.useController = true
+            topBar.visibility = if (playerView.isControllerFullyVisible) View.VISIBLE else View.GONE
         }
-
-        // Saiu do modo PiP.
-        if (pipFechamentoSuspeito) {
-            // Confirmado: onStop() já tinha rodado ainda em PiP (suspeita
-            // de X), e agora o sistema avisa que realmente saiu do PiP —
-            // ou seja, o usuário fechou a telinha no X. Encerra o áudio
-            // de vez e finaliza a Activity.
-            encerrarPorFechamentoDoPip()
-            return
-        }
-
-        // Voltou ao modo normal (ex.: tocou na telinha do PiP pra
-        // maximizar) — segue reproduzindo normalmente em tela cheia.
-        playerView.useController = true
-        topBar.visibility = if (playerView.isControllerFullyVisible) View.VISIBLE else View.GONE
-    }
-
-    // ✅ NOVO: libera player (salvando o progresso, como um fechamento
-    // manual normal) e finaliza a Activity. Chamado quando confirmamos que
-    // o fechamento foi pelo X do PiP.
-    private fun encerrarPorFechamentoDoPip() {
-        if (pipFechamentoSuspeito.not() && isFinishing) return
-        pipFechamentoSuspeito = false
-        handler.removeCallbacksAndMessages(PIP_CLOSE_TOKEN)
-
-        val p = player
-        if (p != null) {
-            if (streamType == "movie") {
-                saveMovieResume(streamId, p.currentPosition, p.duration)
-            } else if (streamType == "series") {
-                saveSeriesResume(streamId, p.currentPosition, p.duration)
-            }
-        }
-        if (activePlayer === player) activePlayer = null
-        player?.stop()
-        player?.release()
-        player = null
-
-        if (!isFinishing) finish()
     }
 
     private fun setupServerList() {
@@ -992,21 +927,9 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    // ✅ NOVO: Activity voltou a ficar visível/ativa normalmente. Se
-    // chegou até aqui, não foi um fechamento pelo X do PiP (senão o
-    // onPictureInPictureModeChanged já teria interceptado e chamado
-    // finish() antes disso rodar) — então qualquer suspeita pendente de
-    // fechamento é descartada.
-    override fun onStart() {
-        super.onStart()
-        pipFechamentoSuspeito = false
-        handler.removeCallbacksAndMessages(PIP_CLOSE_TOKEN)
-    }
-
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(nextChecker)
-        handler.removeCallbacksAndMessages(PIP_CLOSE_TOKEN)
         val p = player
         if (p != null) {
             if (streamType == "movie") {
@@ -1030,35 +953,38 @@ class PlayerActivity : AppCompatActivity() {
                else "$base/$streamType/$user/$pass/$id.$ext"
     }
 
-    // ✅ CORRIGIDO (X do PiP não encerrava o áudio): antes, esse método só
-    // parava/liberava o player quando `!isInPictureInPictureMode`. O
-    // problema é que o Android chama onStop() tanto quando o usuário toca
-    // no X do PiP quanto quando ele só vai pra Home com o PiP ainda
-    // aberto — nos dois casos `isInPictureInPictureMode` continua `true`
-    // e `isFinishing` continua `false` nesse momento, então não dá pra
-    // diferenciar um caso do outro só aqui dentro.
+    // ✅ CORRIGIDO (áudio não parava ao fechar o PiP pelo X):
+    // Segundo a documentação oficial do Android, enquanto a mini-janela do
+    // PiP está genuinamente ativa (o usuário só minimizou, o vídeo continua
+    // tocando por cima de outro app), o sistema NÃO chama onStop() — ele
+    // chama só onPause(). O onStop() só é disparado quando a Activity REALMENTE
+    // some da tela de vez: outro app cobrindo tudo, ou o usuário fechando a
+    // janela do PiP pelo botão X.
     //
-    // Agora, quando cai nesse cenário "ambíguo", só marcamos a suspeita
-    // (`pipFechamentoSuspeito = true`) e mantemos o player vivo. Quem
-    // resolve de vez é o `onPictureInPictureModeChanged`: se o Android
-    // avisar em seguida que saiu do PiP, confirma que foi o X e encerra
-    // tudo ali. Se não avisar (o app só foi pra Home mesmo), a suspeita é
-    // zerada no próximo onStart() e o áudio continua tocando normalmente.
+    // O bug: a versão antiga só liberava o player aqui "if (!isInPictureInPictureMode)".
+    // Só que no instante exato em que o onStop() roda por causa do X, a flag
+    // isInPictureInPictureMode AINDA está true (o Android não "sai" do PiP
+    // antes de descartar a janela, ele só derruba) — então a checagem pulava
+    // o release() e o player ficava vivo tocando áudio escondido. Se depois
+    // disso você abria outro filme/série, os dois áudios tocavam juntos.
     //
-    // O postDelayed abaixo é só uma rede de segurança pra alguns
-    // fabricantes (Samsung/Xiaomi etc.) que às vezes atrasam ou pulam
-    // esse callback — depois de ~800ms sem confirmação nem retomada,
-    // força o encerramento mesmo assim.
+    // A correção: como onStop() só roda quando a tela realmente precisa
+    // sumir de vez (PiP fechado incluso), não faz mais sentido checar
+    // isInPictureInPictureMode aqui — o player é sempre parado e liberado.
+    // Também aproveitamos pra salvar a posição de "continuar assistindo"
+    // aqui, porque fechar pelo X pode não disparar onDestroy().
     override fun onStop() {
         super.onStop()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode && !isFinishing) {
-            pipFechamentoSuspeito = true
-            handler.postAtTime({
-                if (pipFechamentoSuspeito) encerrarPorFechamentoDoPip()
-            }, PIP_CLOSE_TOKEN, android.os.SystemClock.uptimeMillis() + 800L)
-            return
+
+        val p = player
+        if (p != null) {
+            if (streamType == "movie") {
+                saveMovieResume(streamId, p.currentPosition, p.duration)
+            } else if (streamType == "series") {
+                saveSeriesResume(streamId, p.currentPosition, p.duration)
+            }
         }
-        pipFechamentoSuspeito = false
+
         if (activePlayer === player) activePlayer = null
         player?.stop()
         player?.release()
@@ -1067,7 +993,6 @@ class PlayerActivity : AppCompatActivity() {
 
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
-        pipFechamentoSuspeito = false
         if (activePlayer === player) activePlayer = null
         player?.stop()
         player?.release()
@@ -1092,10 +1017,5 @@ class PlayerActivity : AppCompatActivity() {
         // pertença a uma instância diferente da sua.
         @Volatile
         private var activePlayer: ExoPlayer? = null
-
-        // ✅ NOVO: token usado só pra identificar/cancelar o Runnable de
-        // segurança do fechamento do PiP no Handler, sem interferir nos
-        // outros postDelayed que já existiam (nextChecker, retry etc).
-        private val PIP_CLOSE_TOKEN = Any()
     }
 }
