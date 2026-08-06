@@ -249,7 +249,7 @@ class LoginActivity : AppCompatActivity() {
                 // O usuário verá a ProfilesActivity enquanto os dados carregam em
                 // background. Quando ele clicar no perfil e a HomeActivity abrir,
                 // ContentRepository.pronto já será true (ou estará muito próximo).
-                ContentRepository.preCarregar(applicationContext)
+                ContentRepository.recarregar(applicationContext)
 
                 // Pré-carrega lote mínimo no banco em paralelo (sem bloquear navegação)
                 launch(Dispatchers.IO) {
