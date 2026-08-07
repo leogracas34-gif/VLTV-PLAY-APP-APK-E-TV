@@ -87,6 +87,24 @@
 
     </LinearLayout>
 
+    <!-- ✅ NOVO: mesmo padrão do "Ver Detalhes do Filme" na tela de
+         download de filme, agora pra série. -->
+    <TextView
+        android:id="@+id/btnVerDetalhesSerie"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="14dp"
+        android:background="#1A1A1A"
+        android:text="Ver Detalhes da Série"
+        android:textColor="#AAAAAA"
+        android:textAllCaps="false"
+        android:textSize="13.5sp"
+        android:gravity="center"
+        android:clickable="true"
+        android:focusable="true"
+        android:foreground="?attr/selectableItemBackgroundBorderless"/>
+
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
