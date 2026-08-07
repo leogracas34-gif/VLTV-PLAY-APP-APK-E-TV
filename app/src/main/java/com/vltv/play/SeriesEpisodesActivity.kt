@@ -36,10 +36,17 @@ import kotlinx.coroutines.withContext
 // ✅ Mesmo tratamento de estados NA_FILA/PAUSADO que o filme — e o "X"
 // abre um diálogo com 2 opções em vez de cancelar direto.
 //
-// ✅ NOVO: botão "Ver Detalhes da Série" (resolve o series_id real pelo
-// nome no catálogo, mesma lógica usada em SeriesDetailsActivity pras
+// ✅ Botão "Ver Detalhes da Série" (resolve o series_id real pelo nome
+// no catálogo, mesma lógica usada em SeriesDetailsActivity pras
 // sugestões) e barra de progresso "Assistido" em cada episódio já
 // baixado, igual existe na tela de Detalhes da Série.
+//
+// ✅ CORRIGIDO: o player era aberto com stream_type = "vod_offline"
+// (o mesmo tipo usado pelo filme offline), o que fazia o PlayerActivity
+// salvar a posição assistida na chave de FILME em vez da chave de SÉRIE
+// — a barra "Assistido" abaixo nunca era preenchida. Agora usa
+// "series_offline", um tipo próprio que o PlayerActivity reconhece como
+// série. Também corrigido o PROFILE_NAME, que ia fixo como "Padrao".
 // ────────────────────────────────────────────────────────────────
 class SeriesEpisodesActivity : AppCompatActivity() {
 
@@ -197,14 +204,30 @@ class SeriesEpisodesActivity : AppCompatActivity() {
             DownloadDialogHelper.mostrarInfo(this, "Arquivo não encontrado", "Esse download parece estar corrompido. Remova-o da lista e baixe novamente.")
             return
         }
+
+        // ✅ NOVO: lê a posição salva (mesma chave que o PlayerActivity
+        // grava em onPause/onStop/onDestroy pra série) e passa como ponto
+        // de partida, pra "Assistir" retomar de onde parou.
+        val prefs = getSharedPreferences("vltv_prefs", Context.MODE_PRIVATE)
+        val savedPos = prefs.getLong("${currentProfile}_series_resume_${item.stream_id}_pos", 0L)
+
         val intent = Intent(this, PlayerActivity::class.java).apply {
             putExtra("stream_id", item.stream_id)
-            putExtra("stream_type", "vod_offline")
+            // ✅ CORRIGIDO: antes era "vod_offline" (tipo de FILME), o que
+            // fazia o PlayerActivity salvar a posição assistida na chave
+            // errada e a barra "Assistido" nunca aparecer aqui. Agora usa
+            // um tipo próprio de episódio de série offline.
+            putExtra("stream_type", "series_offline")
             putExtra("offline_uri", item.file_path)
             putExtra("offline_url", item.download_url)
             putExtra("channel_name", "${item.name} - ${item.episode_name}")
             putExtra("icon", item.image_url)
-            putExtra("PROFILE_NAME", "Padrao")
+            // ✅ CORRIGIDO: antes ia sempre "Padrao" fixo, quebrando a
+            // leitura/gravação de posição quando o perfil ativo era outro.
+            putExtra("PROFILE_NAME", currentProfile)
+            if (savedPos > 0L) {
+                putExtra("start_position_ms", savedPos)
+            }
         }
         startActivity(intent)
     }
@@ -296,7 +319,7 @@ class SeriesEpisodesActivity : AppCompatActivity() {
             val btnPrimaryAction: FrameLayout   = v.findViewById(R.id.btnDownloadPrimaryAction)
             val imgPrimaryAction: ImageView     = v.findViewById(R.id.imgPrimaryAction)
             val btnDelete: ImageView            = v.findViewById(R.id.btnDownloadDelete)
-            // ✅ NOVO: views da barra "Assistido"
+            // Views da barra "Assistido"
             val layoutWatched: LinearLayout     = v.findViewById(R.id.layoutWatchedProgressItem)
             val pbWatched: ProgressBar          = v.findViewById(R.id.pbWatchedItem)
             val tvWatchedPercent: TextView      = v.findViewById(R.id.tvWatchedPercentItem)
@@ -387,7 +410,7 @@ class SeriesEpisodesActivity : AppCompatActivity() {
                     holder.btnDelete.setOnClickListener { onClickExcluir(item) }
                     holder.itemView.setOnClickListener { onClickPlay(item) }
 
-                    // ✅ NOVO: barra "Assistido" — só faz sentido pra episódio já
+                    // Barra "Assistido" — só faz sentido pra episódio já
                     // baixado. Usa a mesma chave de resume que a tela de
                     // Detalhes da Série já usa.
                     aplicarProgressoAssistido(holder, item)
