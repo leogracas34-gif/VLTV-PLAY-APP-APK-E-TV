@@ -84,6 +84,17 @@
   precisa ser recriado e essas três entradas devolvidas aqui.
 
 =============================================================
+  ✅ NOVO: PICTURE-IN-PICTURE NA LIVE TV
+=============================================================
+
+  - LiveTvActivity agora declara android:supportsPictureInPicture="true"
+    e android:resizeableActivity="true", igual à PlayerActivity. O
+    código Kotlin (onUserLeaveHint chamando enterPictureInPictureMode)
+    já estava correto — faltava só essa declaração no manifest, sem
+    ela o sistema recusa a chamada com IllegalStateException
+    ("Current activity does not support picture-in-picture").
+
+=============================================================
 -->
 
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -181,10 +192,16 @@
             android:exported="true"
             android:screenOrientation="unspecified" />
 
+        <!-- ✅ CORRIGIDO: adicionado supportsPictureInPicture e
+             resizeableActivity, faltavam aqui (a PlayerActivity já
+             tinha). Sem eles o enterPictureInPictureMode() do Kotlin
+             era recusado pelo sistema com IllegalStateException. -->
         <activity
             android:name=".LiveTvActivity"
             android:banner="@mipmap/ic_launcher"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|layoutDirection"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|layoutDirection|keyboardHidden"
             android:launchMode="singleTop"
             android:screenOrientation="sensorLandscape" />
 
