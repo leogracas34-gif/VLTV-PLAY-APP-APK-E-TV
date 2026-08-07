@@ -6,6 +6,8 @@ import android.os.Bundle
 import android.view.View
 import android.widget.Button
 import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -24,6 +26,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.TimeUnit
 
 // ────────────────────────────────────────────────────────────────
 // Tela dedicada de um filme baixado/baixando. Equivalente à
@@ -51,6 +54,11 @@ class MovieDownloadActivity : AppCompatActivity() {
     private lateinit var btnSecondary: Button
     private lateinit var btnVerDetalhes: Button
 
+    // ✅ NOVO: views do progresso de EXIBIÇÃO (assistido)
+    private lateinit var layoutWatchedProgress: LinearLayout
+    private lateinit var pbMovieWatched: ProgressBar
+    private lateinit var tvMovieWatchedInfo: TextView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -72,6 +80,10 @@ class MovieDownloadActivity : AppCompatActivity() {
         btnPrimary     = findViewById(R.id.btnMoviePrimary)
         btnSecondary   = findViewById(R.id.btnMovieSecondary)
         btnVerDetalhes = findViewById(R.id.btnVerDetalhesFilme)
+
+        layoutWatchedProgress = findViewById(R.id.layoutWatchedProgress)
+        pbMovieWatched        = findViewById(R.id.pbMovieWatched)
+        tvMovieWatchedInfo    = findViewById(R.id.tvMovieWatchedInfo)
 
         findViewById<TextView>(R.id.btnBackMovieDownload).setOnClickListener { finish() }
 
@@ -97,11 +109,33 @@ class MovieDownloadActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         iniciarMonitoramento()
+        verificarProgressoAssistido()
     }
 
     override fun onPause() {
         super.onPause()
         monitorJob?.cancel()
+    }
+
+    // ✅ NOVO: verifica se existe posição de exibição salva (o quanto do
+    // filme o usuário já assistiu) e exibe a barra, igual à tela de
+    // Detalhes do Filme.
+    private fun verificarProgressoAssistido() {
+        val prefs   = getSharedPreferences("vltv_prefs", MODE_PRIVATE)
+        val profile = prefs.getString("last_profile_name", "Padrao") ?: "Padrao"
+        val pos     = prefs.getLong("${profile}_movie_resume_${streamId}_pos", 0L)
+        val total   = prefs.getLong("${profile}_movie_resume_${streamId}_dur", 0L)
+
+        if (pos > 30000L && total > 0) {
+            layoutWatchedProgress.visibility = View.VISIBLE
+            pbMovieWatched.progress = ((pos.toFloat() / total.toFloat()) * 100).toInt()
+            val rest    = total - pos
+            val hours   = TimeUnit.MILLISECONDS.toHours(rest)
+            val minutes = TimeUnit.MILLISECONDS.toMinutes(rest) % 60
+            tvMovieWatchedInfo.text = "Restam ${hours}h${minutes}min para terminar"
+        } else {
+            layoutWatchedProgress.visibility = View.GONE
+        }
     }
 
     private fun iniciarMonitoramento() {
