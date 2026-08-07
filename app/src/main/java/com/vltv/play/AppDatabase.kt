@@ -425,8 +425,23 @@ abstract class AppDatabase : RoomDatabase() {
             // aceito nas migrações anteriores (v9→v10, v10→v11).
             .fallbackToDestructiveMigration()
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+            // ✅ CORREÇÃO (demora pra aparecer downloads na tela, inclusive
+            // os que já estavam baixados): trocado de
+            // newFixedThreadPool(4) pra newCachedThreadPool().
+            //
+            // Esse queryExecutor é compartilhado por TODAS as queries
+            // suspend do Room no app inteiro (Home, catálogo VOD/séries,
+            // categorias, histórico, downloads...) e também pela
+            // reconsulta/emissão do LiveData quando uma tabela muda. Com
+            // pool fixo de só 4 threads, quando a Home tava carregando
+            // várias categorias/VOD/séries ao mesmo tempo, a fila enchia
+            // e a consulta de Downloads (getDownloadsByProfile) ficava
+            // esperando vaga liberar — mesmo pra mostrar itens que JÁ
+            // estavam baixados. cachedThreadPool cria threads sob demanda
+            // (e reaproveita as ociosas), então uma consulta rápida como
+            // a de Downloads não fica presa atrás de outras.
             .setQueryExecutor(
-                java.util.concurrent.Executors.newFixedThreadPool(4)
+                java.util.concurrent.Executors.newCachedThreadPool()
             )
             .build()
         }
