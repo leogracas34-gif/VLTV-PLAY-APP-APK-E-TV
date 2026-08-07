@@ -468,6 +468,21 @@ class PlayerActivity : AppCompatActivity() {
         activePlayer = null
     }
 
+    // ✅ NOVO: identifica se o streamType atual representa um FILME, seja
+    // ele online ("movie") ou baixado ("vod_offline"). Antes, o código de
+    // salvar/limpar a posição assistida (onPause/onStop/onDestroy) só
+    // checava streamType == "movie" — como o MovieDownloadActivity abre o
+    // player offline com streamType = "vod_offline", a posição nunca era
+    // salva e a barra "Assistido" na tela de Download nunca aparecia.
+    private fun isMovieType(): Boolean = streamType == "movie" || streamType == "vod_offline"
+
+    // ✅ NOVO: mesma ideia, mas pra EPISÓDIO DE SÉRIE. Importante usar um
+    // tipo diferente de "vod_offline" (aqui, "series_offline") pra não
+    // misturar com filme offline — senão o episódio salvaria a posição na
+    // chave "*_movie_resume_*" em vez de "*_series_resume_*", e a barra
+    // "Assistido" em SeriesEpisodesActivity nunca apareceria.
+    private fun isSeriesType(): Boolean = streamType == "series" || streamType == "series_offline"
+
     // ✅ NOVO: bloco de reprodução offline reescrito para usar o
     // CacheDataSource do Media3 (lendo do mesmo SimpleCache usado pelo
     // DownloadHelper pra baixar). "contentId" é a chave que localiza os
@@ -475,7 +490,9 @@ class PlayerActivity : AppCompatActivity() {
     // e de fallback caso falte algo no cache (FLAG_IGNORE_CACHE_ON_ERROR).
     @OptIn(UnstableApi::class)
     private fun iniciarPlayer() {
-        if (streamType == "vod_offline" || !offlineUri.isNullOrBlank()) {
+        // ✅ CORRIGIDO: cobre tanto filme baixado ("vod_offline") quanto
+        // episódio de série baixado ("series_offline").
+        if (streamType == "vod_offline" || streamType == "series_offline" || !offlineUri.isNullOrBlank()) {
             val contentId = offlineUri
             val urlOriginal = offlineUrl
 
@@ -515,6 +532,14 @@ class PlayerActivity : AppCompatActivity() {
                 val mediaItem = MediaItem.fromUri(Uri.parse(urlOriginal))
                 player?.setMediaItem(mediaItem)
                 player?.prepare()
+
+                // ✅ NOVO: retoma o filme baixado de onde o usuário parou,
+                // igual já acontecia no fluxo online. Sem isso, todo filme
+                // offline sempre começava do zero mesmo tendo posição salva.
+                if (startPositionMs > 0L) {
+                    player?.seekTo(startPositionMs)
+                }
+
                 player?.playWhenReady = true
 
                 player?.addListener(object : Player.Listener {
@@ -522,6 +547,17 @@ class PlayerActivity : AppCompatActivity() {
                         when (state) {
                             Player.STATE_READY     -> loading.visibility = View.GONE
                             Player.STATE_BUFFERING -> loading.visibility = View.VISIBLE
+                            Player.STATE_ENDED     -> {
+                                // ✅ NOVO: ao terminar de assistir offline,
+                                // limpa a posição salva — mesmo
+                                // comportamento do conteúdo online, mas
+                                // usando a chave certa conforme o tipo.
+                                if (streamType == "vod_offline") {
+                                    clearMovieResume(streamId)
+                                } else if (streamType == "series_offline") {
+                                    clearSeriesResume(streamId)
+                                }
+                            }
                         }
                     }
                     override fun onPlayerError(error: PlaybackException) {
@@ -716,25 +752,32 @@ class PlayerActivity : AppCompatActivity() {
             .putLong("${getMovieKey(id)}_pos", positionMs)
             .putLong("${getMovieKey(id)}_dur", durationMs)
             .apply()
-        salvarNoFirebase(id, positionMs, durationMs)
-        salvarNoHistoricoLocal(id.toString())
-        val nomeAtual = tvChannelName.text.toString()
-        val iconeAtual = intent.getStringExtra("icon") ?: ""
-        val profileAtual = currentProfile
-        historicoScope.launch {
-            try {
-                AppDatabase.getDatabase(applicationContext).streamDao().saveWatchHistory(WatchHistoryEntity(
-                    stream_id     = id,
-                    profile_name  = profileAtual,
-                    name          = nomeAtual,
-                    icon          = iconeAtual,
-                    last_position = positionMs,
-                    duration      = durationMs,
-                    is_series     = false,
-                    timestamp     = System.currentTimeMillis()
-                ))
-            } catch (e: Exception) {
-                Log.e("VLTV_WatchHistory", "Erro ao salvar histórico do filme $id: ${e.message}", e)
+        // ✅ Registro no Firebase/Room de histórico só faz sentido pra
+        // filmes ONLINE (streamType == "movie"). Para filme baixado
+        // (vod_offline) mantemos só o SharedPreferences local acima, que é
+        // o que a tela de Download lê — evita gravar "assistindo offline"
+        // como se fosse consumo de streaming normal.
+        if (streamType == "movie") {
+            salvarNoFirebase(id, positionMs, durationMs)
+            salvarNoHistoricoLocal(id.toString())
+            val nomeAtual = tvChannelName.text.toString()
+            val iconeAtual = intent.getStringExtra("icon") ?: ""
+            val profileAtual = currentProfile
+            historicoScope.launch {
+                try {
+                    AppDatabase.getDatabase(applicationContext).streamDao().saveWatchHistory(WatchHistoryEntity(
+                        stream_id     = id,
+                        profile_name  = profileAtual,
+                        name          = nomeAtual,
+                        icon          = iconeAtual,
+                        last_position = positionMs,
+                        duration      = durationMs,
+                        is_series     = false,
+                        timestamp     = System.currentTimeMillis()
+                    ))
+                } catch (e: Exception) {
+                    Log.e("VLTV_WatchHistory", "Erro ao salvar histórico do filme $id: ${e.message}", e)
+                }
             }
         }
     }
@@ -760,25 +803,31 @@ class PlayerActivity : AppCompatActivity() {
             .putLong("${getSeriesKey(id)}_pos", positionMs)
             .putLong("${getSeriesKey(id)}_dur", durationMs)
             .apply()
-        salvarNoFirebase(id, positionMs, durationMs)
-        salvarNoHistoricoLocal(id.toString())
-        val nomeAtual = tvChannelName.text.toString()
-        val iconeAtual = intent.getStringExtra("icon") ?: ""
-        val profileAtual = currentProfile
-        historicoScope.launch {
-            try {
-                AppDatabase.getDatabase(applicationContext).streamDao().saveWatchHistory(WatchHistoryEntity(
-                    stream_id     = id,
-                    profile_name  = profileAtual,
-                    name          = nomeAtual,
-                    icon          = iconeAtual,
-                    last_position = positionMs,
-                    duration      = durationMs,
-                    is_series     = true,
-                    timestamp     = System.currentTimeMillis()
-                ))
-            } catch (e: Exception) {
-                Log.e("VLTV_WatchHistory", "Erro ao salvar histórico da série $id: ${e.message}", e)
+        // ✅ Mesmo critério do filme: histórico/Firebase só pra streaming
+        // ONLINE (streamType == "series"). Episódio offline (series_offline)
+        // grava só a chave local acima, que é o que a barra "Assistido" em
+        // SeriesEpisodesActivity lê.
+        if (streamType == "series") {
+            salvarNoFirebase(id, positionMs, durationMs)
+            salvarNoHistoricoLocal(id.toString())
+            val nomeAtual = tvChannelName.text.toString()
+            val iconeAtual = intent.getStringExtra("icon") ?: ""
+            val profileAtual = currentProfile
+            historicoScope.launch {
+                try {
+                    AppDatabase.getDatabase(applicationContext).streamDao().saveWatchHistory(WatchHistoryEntity(
+                        stream_id     = id,
+                        profile_name  = profileAtual,
+                        name          = nomeAtual,
+                        icon          = iconeAtual,
+                        last_position = positionMs,
+                        duration      = durationMs,
+                        is_series     = true,
+                        timestamp     = System.currentTimeMillis()
+                    ))
+                } catch (e: Exception) {
+                    Log.e("VLTV_WatchHistory", "Erro ao salvar histórico da série $id: ${e.message}", e)
+                }
             }
         }
     }
@@ -919,9 +968,12 @@ class PlayerActivity : AppCompatActivity() {
         super.onPause()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !isInPictureInPictureMode) {
             val p = player ?: return
-            if (streamType == "movie") {
+            // ✅ CORRIGIDO: isMovieType() cobre "movie" (online) E
+            // "vod_offline" (baixado) — antes só "movie" era salvo, então
+            // pausar/sair de um filme baixado nunca gravava a posição.
+            if (isMovieType()) {
                 saveMovieResume(streamId, p.currentPosition, p.duration)
-            } else if (streamType == "series") {
+            } else if (isSeriesType()) {
                 saveSeriesResume(streamId, p.currentPosition, p.duration)
             }
         }
@@ -932,9 +984,10 @@ class PlayerActivity : AppCompatActivity() {
         handler.removeCallbacks(nextChecker)
         val p = player
         if (p != null) {
-            if (streamType == "movie") {
+            // ✅ CORRIGIDO: mesmo ajuste do onPause — cobre filme offline.
+            if (isMovieType()) {
                 saveMovieResume(streamId, p.currentPosition, p.duration)
-            } else if (streamType == "series") {
+            } else if (isSeriesType()) {
                 saveSeriesResume(streamId, p.currentPosition, p.duration)
             }
         }
@@ -978,9 +1031,13 @@ class PlayerActivity : AppCompatActivity() {
 
         val p = player
         if (p != null) {
-            if (streamType == "movie") {
+            // ✅ CORRIGIDO: mesmo ajuste do onPause/onDestroy — cobre
+            // filme offline (vod_offline), que é o caso mais comum de
+            // "usuário fecha pelo botão voltar" logo depois de assistir
+            // um pouco do download.
+            if (isMovieType()) {
                 saveMovieResume(streamId, p.currentPosition, p.duration)
-            } else if (streamType == "series") {
+            } else if (isSeriesType()) {
                 saveSeriesResume(streamId, p.currentPosition, p.duration)
             }
         }
@@ -1019,4 +1076,3 @@ class PlayerActivity : AppCompatActivity() {
         private var activePlayer: ExoPlayer? = null
     }
 }
-
