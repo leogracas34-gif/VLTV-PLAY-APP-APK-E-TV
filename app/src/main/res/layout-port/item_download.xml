@@ -127,6 +127,42 @@
 
             </LinearLayout>
 
+            <!-- ✅ NOVO: Barra de progresso de EXIBIÇÃO (quanto do episódio já
+                 foi assistido) — só aparece quando o episódio está baixado
+                 (BAIXADO) E existe posição de resume salva. Verde pra
+                 diferenciar visualmente da barra de download (vermelha). -->
+            <LinearLayout
+                android:id="@+id/layoutWatchedProgressItem"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="6dp"
+                android:visibility="gone">
+
+                <ProgressBar
+                    android:id="@+id/pbWatchedItem"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="0dp"
+                    android:layout_height="4dp"
+                    android:layout_weight="1"
+                    android:progressTint="#4CAF50"
+                    android:progressBackgroundTint="#2A2A34"
+                    android:max="100"
+                    android:progress="0"/>
+
+                <TextView
+                    android:id="@+id/tvWatchedPercentItem"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:textColor="#4CAF50"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:text="Assistido"/>
+
+            </LinearLayout>
+
         </LinearLayout>
 
         <!-- ── Ações: abrir/cancelar + excluir ──────────────────── -->
