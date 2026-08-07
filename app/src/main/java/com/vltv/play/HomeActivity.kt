@@ -1554,11 +1554,17 @@ class HomeActivity : AppCompatActivity() {
         }
 
         if (imageUrl.isNotBlank()) {
-            try {
-                Glide.with(this).load(imageUrl).centerCrop()
-                    .diskCacheStrategy(DiskCacheStrategy.ALL)
-                    .into(card.findViewById(R.id.imgFeaturedBanner))
-            } catch (e: Exception) { e.printStackTrace() }
+    try {
+        Glide.with(this)
+            .load(imageUrl)
+            .centerCrop()
+            .format(DecodeFormat.PREFER_RGB_565)   // menos bytes decodificados, decodifica mais rápido
+            .diskCacheStrategy(DiskCacheStrategy.ALL)
+            .priority(com.bumptech.glide.Priority.IMMEDIATE) // não fica na fila atrás dos pôsteres
+            .override(720, 405)                     // ajuste pro tamanho real do card — evita baixar em resolução original
+            .dontAnimate()
+            .into(card.findViewById(R.id.imgFeaturedBanner))
+    } catch (e: Exception) { e.printStackTrace() }
         }
 
         card.visibility = View.VISIBLE
