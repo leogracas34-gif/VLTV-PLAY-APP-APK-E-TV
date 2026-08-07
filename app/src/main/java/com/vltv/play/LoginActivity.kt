@@ -75,6 +75,10 @@ class LoginActivity : AppCompatActivity() {
         // ser o normal (Theme.VLTVPlay), configurado no AndroidManifest.
         super.onCreate(savedInstanceState)
 
+        // ✅ NOVO: precisa rodar ANTES de ler "vltv_prefs" logo abaixo.
+        // Ver explicação completa na função.
+        limparLoginRestauradoSeInstalacaoNova()
+
         binding = ActivityLoginBinding.inflate(layoutInflater)
         setContentView(binding.root)
         aplicarModoImersivo()
@@ -95,6 +99,44 @@ class LoginActivity : AppCompatActivity() {
             verificarEIniciarRapido(savedDns, savedUser, savedPass)
         } else {
             setupUI()
+        }
+    }
+
+    // ✅ NOVO: resolve o caso "desinstalei o app, reinstalei, e o login
+    // antigo voltou sozinho". Isso acontece por causa do Auto Backup do
+    // Android: ele tira snapshots periódicos de "vltv_prefs" (onde ficam
+    // username/password/dns/last_profile_name) e os restaura sozinho ao
+    // reinstalar o app na mesma conta Google — mesmo que o usuário tenha
+    // desinstalado JUSTAMENTE pra trocar de login.
+    //
+    // A solução usa um SEGUNDO arquivo de preferências, "vltv_device_marker",
+    // que é EXCLUÍDO do backup (ver res/xml/backup_rules.xml e
+    // data_extraction_rules.xml — só esse arquivo é excluído, o resto do
+    // backup continua normal). Esse marcador só existe fisicamente no
+    // aparelho onde o app rodou pelo menos uma vez; ele nunca "volta" pelo
+    // backup.
+    //
+    // Lógica: se o marcador NÃO existe, mas já existe login salvo em
+    // "vltv_prefs", esse login só pode ter chegado ali via restauração de
+    // backup (não tem como ser de uma sessão real, já que esse é o
+    // primeiro onCreate desta instalação) — então apaga só as chaves de
+    // login/perfil e deixa o app cair normalmente na tela de login. Depois
+    // disso o marcador é gravado, e essa limpeza não roda de novo até a
+    // próxima desinstalação/reinstalação.
+    private fun limparLoginRestauradoSeInstalacaoNova() {
+        val marcador = getSharedPreferences("vltv_device_marker", Context.MODE_PRIVATE)
+        val jaRodouNesteAparelho = marcador.getBoolean("instalado", false)
+
+        if (!jaRodouNesteAparelho) {
+            getSharedPreferences("vltv_prefs", Context.MODE_PRIVATE).edit()
+                .remove("username")
+                .remove("password")
+                .remove("dns")
+                .remove("last_profile_name")
+                .remove("last_profile_icon")
+                .apply()
+
+            marcador.edit().putBoolean("instalado", true).apply()
         }
     }
 
