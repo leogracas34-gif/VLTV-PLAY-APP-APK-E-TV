@@ -82,7 +82,46 @@
             android:textColor="#A6FFFFFF"
             android:textSize="14sp" />
 
-        <!-- Progresso -->
+        <!-- ✅ NOVO: Progresso de EXIBIÇÃO (quanto do filme já foi assistido) -->
+        <LinearLayout
+            android:id="@+id/layoutWatchedProgress"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="32dp"
+            android:paddingEnd="32dp"
+            android:layout_marginTop="18dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/tvMovieWatchedLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Assistido"
+                android:textColor="#CCCCCC"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="6dp" />
+
+            <ProgressBar
+                android:id="@+id/pbMovieWatched"
+                style="@android:style/Widget.ProgressBar.Horizontal"
+                android:layout_width="match_parent"
+                android:layout_height="6dp"
+                android:max="100"
+                android:progressTint="#E50914"
+                android:progressBackgroundTint="#33FFFFFF" />
+
+            <TextView
+                android:id="@+id/tvMovieWatchedInfo"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:textColor="#A6FFFFFF"
+                android:textSize="12.5sp" />
+        </LinearLayout>
+
+        <!-- Progresso do DOWNLOAD -->
         <FrameLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
