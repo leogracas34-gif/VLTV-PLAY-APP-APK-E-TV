@@ -1,5 +1,6 @@
 package com.vltv.play
 
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -17,19 +18,28 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
 import com.bumptech.glide.load.engine.DiskCacheStrategy
 import com.vltv.play.data.AppDatabase
 import com.vltv.play.data.DownloadEntity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // ────────────────────────────────────────────────────────────────
 // Tela aberta ao tocar num "card de série" em Meus Downloads. Mostra só
 // os episódios baixados/baixando/na fila/pausados daquela série.
 //
-// ✅ NOVO: mesmo tratamento de estados NA_FILA/PAUSADO que o filme —
-// e o "X" agora abre um diálogo com 2 opções em vez de cancelar direto.
+// ✅ Mesmo tratamento de estados NA_FILA/PAUSADO que o filme — e o "X"
+// abre um diálogo com 2 opções em vez de cancelar direto.
+//
+// ✅ NOVO: botão "Ver Detalhes da Série" (resolve o series_id real pelo
+// nome no catálogo, mesma lógica usada em SeriesDetailsActivity pras
+// sugestões) e barra de progresso "Assistido" em cada episódio já
+// baixado, igual existe na tela de Detalhes da Série.
 // ────────────────────────────────────────────────────────────────
 class SeriesEpisodesActivity : AppCompatActivity() {
 
@@ -40,6 +50,11 @@ class SeriesEpisodesActivity : AppCompatActivity() {
     private lateinit var adapter: EpisodiosAdapter
 
     private var seriesName: String = ""
+    private var seriesImage: String? = null
+    private var currentProfile: String = "Padrao"
+    private var currentProfileIcon: String? = null
+
+    private val database by lazy { AppDatabase.getDatabase(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,8 +65,16 @@ class SeriesEpisodesActivity : AppCompatActivity() {
 
         setContentView(R.layout.activity_series_episodes)
 
-        seriesName = intent.getStringExtra("series_name") ?: ""
-        val seriesImage = intent.getStringExtra("series_image")
+        val vltvPrefs = getSharedPreferences("vltv_prefs", Context.MODE_PRIVATE)
+        currentProfile = intent.getStringExtra("PROFILE_NAME")
+            ?: vltvPrefs.getString("last_profile_name", null)
+            ?: "Padrao"
+        currentProfileIcon = intent.getStringExtra("PROFILE_ICON")
+            ?.takeIf { it.isNotEmpty() }
+            ?: vltvPrefs.getString("last_profile_icon", null)?.takeIf { it.isNotEmpty() }
+
+        seriesName  = intent.getStringExtra("series_name") ?: ""
+        seriesImage = intent.getStringExtra("series_image")
 
         rvEpisodios      = findViewById(R.id.rvEpisodios)
         imgHeaderPoster  = findViewById(R.id.imgSeriesHeaderPoster)
@@ -60,6 +83,7 @@ class SeriesEpisodesActivity : AppCompatActivity() {
 
         findViewById<TextView>(R.id.btnBackSeries).setOnClickListener { finish() }
         findViewById<ImageView>(R.id.btnExcluirSerieHeader).setOnClickListener { confirmarExclusaoSerie() }
+        findViewById<TextView>(R.id.btnVerDetalhesSerie).setOnClickListener { abrirDetalhesDaSerie() }
 
         tvHeaderName.text = seriesName
         Glide.with(this)
@@ -73,6 +97,7 @@ class SeriesEpisodesActivity : AppCompatActivity() {
 
         adapter = EpisodiosAdapter(
             emptyList(),
+            profile = currentProfile,
             onClickPlay = { item -> abrirPlayerOffline(item) },
             onClickPrimaryAction = { item -> handlePrimaryAction(item) },
             onClickExcluir = { item -> confirmarExclusaoEpisodio(item) }
@@ -80,6 +105,13 @@ class SeriesEpisodesActivity : AppCompatActivity() {
         rvEpisodios.adapter = adapter
 
         observarBancoDeDados()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Progresso de exibição pode ter mudado (usuário voltou de assistir
+        // um episódio offline), então força reload das barras "Assistido".
+        adapter.notifyDataSetChanged()
     }
 
     private fun observarBancoDeDados() {
@@ -100,6 +132,66 @@ class SeriesEpisodesActivity : AppCompatActivity() {
         }
     }
 
+    // ─────────────────────────────────────────────────────────────
+    // VER DETALHES DA SÉRIE
+    // ─────────────────────────────────────────────────────────────
+
+    private fun normalizarTituloParaMatch(titulo: String): String {
+        return titulo
+            .replace(Regex("\\(\\d{4}\\)"), "")
+            .replace(Regex("(?i)\\b(4K|FULL HD|HD|SD|DUBLADO|LEGENDADO|DUAL|BLURAY|WEB-DL|HEVC|H264|H265|UHD|FHD|HDR)\\b"), "")
+            .trim()
+    }
+
+    private suspend fun resolverSeriesIdReal(tituloOriginal: String): Pair<Int, String>? =
+        withContext(Dispatchers.IO) {
+            val tituloLimpo = normalizarTituloParaMatch(tituloOriginal)
+            if (tituloLimpo.isBlank()) return@withContext null
+
+            var cursor = database.openHelper.readableDatabase.query(
+                "SELECT series_id, cover FROM series_streams WHERE name = ? COLLATE NOCASE LIMIT 1",
+                arrayOf(tituloLimpo)
+            )
+            if (cursor.moveToFirst()) {
+                val id    = cursor.getInt(0)
+                val cover = cursor.getString(1) ?: ""
+                cursor.close()
+                return@withContext id to cover
+            }
+            cursor.close()
+
+            cursor = database.openHelper.readableDatabase.query(
+                "SELECT series_id, cover FROM series_streams WHERE name LIKE ? ORDER BY LENGTH(name) ASC LIMIT 1",
+                arrayOf("%$tituloLimpo%")
+            )
+            if (cursor.moveToFirst()) {
+                val id    = cursor.getInt(0)
+                val cover = cursor.getString(1) ?: ""
+                cursor.close()
+                return@withContext id to cover
+            }
+            cursor.close()
+            null
+        }
+
+    private fun abrirDetalhesDaSerie() {
+        lifecycleScope.launch {
+            val resolvido = resolverSeriesIdReal(seriesName)
+            if (resolvido == null) {
+                Toast.makeText(this@SeriesEpisodesActivity, "Essa série não está disponível no seu catálogo atual.", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val (idReal, coverReal) = resolvido
+            startActivity(Intent(this@SeriesEpisodesActivity, SeriesDetailsActivity::class.java).apply {
+                putExtra("series_id", idReal)
+                putExtra("name", seriesName)
+                putExtra("icon", coverReal.ifEmpty { seriesImage ?: "" })
+                putExtra("PROFILE_NAME", currentProfile)
+                putExtra("PROFILE_ICON", currentProfileIcon)
+            })
+        }
+    }
+
     private fun abrirPlayerOffline(item: DownloadEntity) {
         if (item.file_path.isBlank() || item.download_url.isBlank()) {
             DownloadDialogHelper.mostrarInfo(this, "Arquivo não encontrado", "Esse download parece estar corrompido. Remova-o da lista e baixe novamente.")
@@ -117,7 +209,7 @@ class SeriesEpisodesActivity : AppCompatActivity() {
         startActivity(intent)
     }
 
-    // ✅ NOVO: mesmo comportamento do filme — Pausar/Cancelar se estiver
+    // ✅ mesmo comportamento do filme — Pausar/Cancelar se estiver
     // baixando ou na fila; Continuar/Cancelar se já estiver pausado.
     private fun handlePrimaryAction(item: DownloadEntity) {
         when (item.status) {
@@ -181,6 +273,7 @@ class SeriesEpisodesActivity : AppCompatActivity() {
 
     class EpisodiosAdapter(
         private var items: List<DownloadEntity>,
+        private val profile: String,
         private val onClickPlay: (DownloadEntity) -> Unit,
         private val onClickPrimaryAction: (DownloadEntity) -> Unit,
         private val onClickExcluir: (DownloadEntity) -> Unit
@@ -203,6 +296,10 @@ class SeriesEpisodesActivity : AppCompatActivity() {
             val btnPrimaryAction: FrameLayout   = v.findViewById(R.id.btnDownloadPrimaryAction)
             val imgPrimaryAction: ImageView     = v.findViewById(R.id.imgPrimaryAction)
             val btnDelete: ImageView            = v.findViewById(R.id.btnDownloadDelete)
+            // ✅ NOVO: views da barra "Assistido"
+            val layoutWatched: LinearLayout     = v.findViewById(R.id.layoutWatchedProgressItem)
+            val pbWatched: ProgressBar          = v.findViewById(R.id.pbWatchedItem)
+            val tvWatchedPercent: TextView      = v.findViewById(R.id.tvWatchedPercentItem)
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
@@ -240,6 +337,8 @@ class SeriesEpisodesActivity : AppCompatActivity() {
 
                     holder.btnDelete.visibility = View.GONE
                     holder.itemView.setOnClickListener { onClickPrimaryAction(item) }
+
+                    holder.layoutWatched.visibility = View.GONE
                 }
                 "PAUSADO" -> {
                     holder.imgStatusPhone.visibility = View.GONE
@@ -257,6 +356,8 @@ class SeriesEpisodesActivity : AppCompatActivity() {
 
                     holder.btnDelete.visibility = View.GONE
                     holder.itemView.setOnClickListener { onClickPrimaryAction(item) }
+
+                    holder.layoutWatched.visibility = View.GONE
                 }
                 "ERRO" -> {
                     holder.imgStatusPhone.visibility = View.GONE
@@ -268,6 +369,8 @@ class SeriesEpisodesActivity : AppCompatActivity() {
                     holder.btnDelete.visibility = View.VISIBLE
                     holder.btnDelete.setOnClickListener { onClickExcluir(item) }
                     holder.itemView.setOnClickListener { onClickExcluir(item) }
+
+                    holder.layoutWatched.visibility = View.GONE
                 }
                 else -> {
                     holder.imgStatusPhone.visibility = View.VISIBLE
@@ -283,7 +386,26 @@ class SeriesEpisodesActivity : AppCompatActivity() {
                     holder.btnDelete.visibility = View.VISIBLE
                     holder.btnDelete.setOnClickListener { onClickExcluir(item) }
                     holder.itemView.setOnClickListener { onClickPlay(item) }
+
+                    // ✅ NOVO: barra "Assistido" — só faz sentido pra episódio já
+                    // baixado. Usa a mesma chave de resume que a tela de
+                    // Detalhes da Série já usa.
+                    aplicarProgressoAssistido(holder, item)
                 }
+            }
+        }
+
+        private fun aplicarProgressoAssistido(holder: VH, item: DownloadEntity) {
+            val prefs = holder.itemView.context.getSharedPreferences("vltv_prefs", Context.MODE_PRIVATE)
+            val pos = prefs.getLong("${profile}_series_resume_${item.stream_id}_pos", 0L)
+            val dur = prefs.getLong("${profile}_series_resume_${item.stream_id}_dur", 0L)
+            if (pos > 10000L && dur > 0) {
+                val percent = ((pos.toFloat() / dur.toFloat()) * 100).toInt().coerceIn(0, 100)
+                holder.layoutWatched.visibility = View.VISIBLE
+                holder.pbWatched.progress = percent
+                holder.tvWatchedPercent.text = if (percent >= 95) "Concluído" else "Assistido $percent%"
+            } else {
+                holder.layoutWatched.visibility = View.GONE
             }
         }
 
