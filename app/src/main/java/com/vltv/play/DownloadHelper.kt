@@ -36,6 +36,16 @@ import kotlinx.coroutines.*
 //     abrir — isso ANTES parecia "baixando 0%" parado, o que dava a
 //     impressão de trava. Agora fica claro que é só fila de espera.
 //   - STATE_PAUSADO: o usuário pausou manualmente esse item específico.
+//
+// ✅ CORREÇÃO (demora pra aparecer na tela de Downloads): em
+// iniciarDownload(), o insert no Room agora acontece ANTES de
+// DownloadService.sendAddDownload(). Antes, o insert só rodava depois do
+// sendAddDownload terminar — e como esse comando aciona o DownloadService
+// (que pode gastar um tempo inicializando o DownloadManager do Media3 na
+// primeira chamada), a linha só existia no banco depois disso, deixando a
+// tela de Downloads (que observa LiveData do Room) "vazia" até então.
+// Agora a UI atualiza na hora, mostrando "Na fila de espera..." assim que
+// o usuário manda baixar.
 // ────────────────────────────────────────────────────────────────
 @UnstableApi
 object DownloadHelper {
@@ -86,19 +96,9 @@ object DownloadHelper {
 
                 val contentId = "${tipo}_${streamId}_${System.currentTimeMillis()}"
 
-                val request = DownloadRequest.Builder(contentId, Uri.parse(url))
-                    .setCustomCacheKey(contentId)
-                    .build()
-
-                withContext(Dispatchers.Main) {
-                    DownloadService.sendAddDownload(
-                        context,
-                        VltvDownloadService::class.java,
-                        request,
-                        /* foreground = */ false
-                    )
-                }
-
+                // ✅ Grava no banco ANTES de acionar o DownloadService — a
+                // tela de Downloads atualiza na hora (LiveData), sem esperar
+                // o Media3 inicializar o DownloadManager internamente.
                 val entity = DownloadEntity(
                     stream_id = streamId,
                     name = nomePrincipal,
@@ -113,6 +113,19 @@ object DownloadHelper {
                     profile_name = profileName
                 )
                 AppDatabase.getDatabase(context).streamDao().insertDownload(entity)
+
+                val request = DownloadRequest.Builder(contentId, Uri.parse(url))
+                    .setCustomCacheKey(contentId)
+                    .build()
+
+                withContext(Dispatchers.Main) {
+                    DownloadService.sendAddDownload(
+                        context,
+                        VltvDownloadService::class.java,
+                        request,
+                        /* foreground = */ false
+                    )
+                }
 
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Download iniciado...", Toast.LENGTH_SHORT).show()
