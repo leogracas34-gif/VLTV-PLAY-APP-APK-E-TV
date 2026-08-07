@@ -61,6 +61,11 @@ class SeriesEpisodesActivity : AppCompatActivity() {
     private var currentProfile: String = "Padrao"
     private var currentProfileIcon: String? = null
 
+    // ✅ NOVO: guarda a lista atual de episódios baixados/baixando dessa
+    // série (já ordenada por temporada/id), pra poder montar a "mochila"
+    // de episódios (só os já BAIXADOS) quando o usuário aperta Assistir.
+    private var episodiosAtuais: List<DownloadEntity> = emptyList()
+
     private val database by lazy { AppDatabase.getDatabase(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -135,6 +140,7 @@ class SeriesEpisodesActivity : AppCompatActivity() {
             }
 
             tvHeaderCount.text = "${episodios.size} episódio(s)"
+            episodiosAtuais = episodios
             adapter.atualizarLista(episodios)
         }
     }
@@ -199,6 +205,10 @@ class SeriesEpisodesActivity : AppCompatActivity() {
         }
     }
 
+    // Status que significam que o episódio AINDA NÃO está pronto pra
+    // assistir (só o download completo entra na mochila de "próximo").
+    private val statusNaoBaixado = setOf("NA_FILA", "BAIXANDO", "DOWNLOADING", "PAUSADO", "ERRO")
+
     private fun abrirPlayerOffline(item: DownloadEntity) {
         if (item.file_path.isBlank() || item.download_url.isBlank()) {
             DownloadDialogHelper.mostrarInfo(this, "Arquivo não encontrado", "Esse download parece estar corrompido. Remova-o da lista e baixe novamente.")
@@ -210,6 +220,17 @@ class SeriesEpisodesActivity : AppCompatActivity() {
         // de partida, pra "Assistir" retomar de onde parou.
         val prefs = getSharedPreferences("vltv_prefs", Context.MODE_PRIVATE)
         val savedPos = prefs.getLong("${currentProfile}_series_resume_${item.stream_id}_pos", 0L)
+
+        // ✅ NOVO: mochila de episódios pro botão "Próximo Episódio"
+        // funcionar offline. Só entram episódios já BAIXADOS (pula
+        // NA_FILA/BAIXANDO/PAUSADO/ERRO) — não faz sentido oferecer
+        // "próximo" pra um episódio que ainda não existe no dispositivo.
+        // A lista já vem ordenada por temporada/id de observarBancoDeDados.
+        val baixados = episodiosAtuais.filter { it.status !in statusNaoBaixado }
+        val episodeIds     = ArrayList(baixados.map { it.stream_id })
+        val episodeSeasons = ArrayList(baixados.map { it.season })
+        val episodeTitles  = ArrayList(baixados.map { "${it.name} - ${it.episode_name}" })
+        val episodeExts    = ArrayList(baixados.map { "mp4" }) // não usado na reprodução offline em si, só mantido por paridade com o fluxo online
 
         val intent = Intent(this, PlayerActivity::class.java).apply {
             putExtra("stream_id", item.stream_id)
@@ -227,6 +248,12 @@ class SeriesEpisodesActivity : AppCompatActivity() {
             putExtra("PROFILE_NAME", currentProfile)
             if (savedPos > 0L) {
                 putExtra("start_position_ms", savedPos)
+            }
+            if (episodeIds.size > 1) {
+                putIntegerArrayListExtra("episode_list", episodeIds)
+                putIntegerArrayListExtra("episode_seasons", episodeSeasons)
+                putStringArrayListExtra("episode_titles", episodeTitles)
+                putStringArrayListExtra("episode_exts", episodeExts)
             }
         }
         startActivity(intent)
