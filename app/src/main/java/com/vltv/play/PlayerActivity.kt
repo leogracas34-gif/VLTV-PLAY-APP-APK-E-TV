@@ -133,7 +133,11 @@ class PlayerActivity : AppCompatActivity() {
     private val nextChecker = object : Runnable {
         override fun run() {
             val p = player ?: return
-            if (streamType != "series" || nextStreamId == 0) return
+            // ✅ CORRIGIDO: antes só rodava com streamType == "series"
+            // (online). Agora também considera "series_offline", pra o
+            // botão "Próximo Episódio" e o countdown aparecerem quando o
+            // usuário está assistindo episódios baixados.
+            if (!isSeriesType() || nextStreamId == 0) return
             if (nextEpisodeLaunched) return
 
             // Só executa se o player estiver realmente reproduzindo (evita interferir no buffering)
@@ -312,7 +316,11 @@ class PlayerActivity : AppCompatActivity() {
             carregarEpg()
         }
 
-        if (streamType == "series" && nextStreamId != 0) {
+        // ✅ CORRIGIDO: antes só ativava pra série ONLINE. Episódios
+        // baixados (series_offline) já têm a mochila de episódios própria
+        // montada em SeriesEpisodesActivity, então o checker também deve
+        // rodar aqui pra mostrar o botão "Próximo Episódio".
+        if (isSeriesType() && nextStreamId != 0) {
             handler.post(nextChecker)
         }
     }
@@ -370,7 +378,11 @@ class PlayerActivity : AppCompatActivity() {
     // depender de regex em cima do texto atual).
     private fun calcularProximoEpisodioAutomaticamente() {
         if (nextStreamId != 0) return
-        if (episodeList.isNotEmpty() && streamType == "series") {
+        // ✅ CORRIGIDO: isSeriesType() cobre "series" (online) e
+        // "series_offline" (baixado) — a mochila de episódios baixados
+        // agora vem da SeriesEpisodesActivity com só os que já tem no
+        // dispositivo, então esse cálculo funciona igual pros dois casos.
+        if (episodeList.isNotEmpty() && isSeriesType()) {
             val indexAtual = episodeList.indexOf(streamId)
             if (indexAtual != -1 && indexAtual < episodeList.size - 1) {
                 nextStreamId = episodeList[indexAtual + 1]
@@ -556,6 +568,10 @@ class PlayerActivity : AppCompatActivity() {
                                     clearMovieResume(streamId)
                                 } else if (streamType == "series_offline") {
                                     clearSeriesResume(streamId)
+                                    // ✅ NOVO: se tiver próximo episódio já
+                                    // baixado, encadeia igual acontece no
+                                    // fluxo online.
+                                    if (nextStreamId != 0 && !nextEpisodeLaunched) abrirProximoEpisodio()
                                 }
                             }
                         }
@@ -703,6 +719,14 @@ class PlayerActivity : AppCompatActivity() {
         player?.release()
         player = null
 
+        // ✅ NOVO: se está assistindo um episódio BAIXADO, o próximo
+        // também precisa ser aberto em modo offline (lendo do download
+        // salvo no banco) — não faz sentido tentar streaming online aqui.
+        if (streamType == "series_offline") {
+            abrirProximoEpisodioOffline()
+            return
+        }
+
         val indexAtual = episodeList.indexOf(streamId)
         val indexProximo = if (indexAtual != -1) indexAtual + 1 else -1
         val extProximo = episodeExts.getOrNull(indexProximo) ?: "mp4"
@@ -723,6 +747,45 @@ class PlayerActivity : AppCompatActivity() {
         }
         startActivity(intent)
         finish()
+    }
+
+    // ✅ NOVO: versão offline de abrirProximoEpisodio(). Busca no Room o
+    // DownloadEntity do próximo episódio (mesma tabela de downloads usada
+    // em SeriesEpisodesActivity) pra pegar o file_path/download_url reais
+    // — sem isso não tem como montar o CacheDataSource do episódio
+    // seguinte. Se o próximo episódio ainda não foi baixado (ex.: usuário
+    // baixou só alguns episódios da temporada), avisa e não força nada.
+    private fun abrirProximoEpisodioOffline() {
+        lifecycleScope.launch {
+            val dl = withContext(Dispatchers.IO) {
+                database.streamDao().getDownloadByStreamId(nextStreamId, "series")
+            }
+            if (dl == null || dl.file_path.isBlank() || dl.download_url.isBlank()) {
+                Toast.makeText(this@PlayerActivity, "O próximo episódio ainda não foi baixado.", Toast.LENGTH_LONG).show()
+                finish()
+                return@launch
+            }
+
+            val novoTitulo = "${dl.name} - ${dl.episode_name}"
+
+            val intent = Intent(this@PlayerActivity, PlayerActivity::class.java)
+            intent.putExtra("stream_id",    nextStreamId)
+            intent.putExtra("stream_type",  "series_offline")
+            intent.putExtra("offline_uri",  dl.file_path)
+            intent.putExtra("offline_url",  dl.download_url)
+            intent.putExtra("channel_name", novoTitulo)
+            intent.putExtra("icon",         dl.image_url)
+            intent.putExtra("PROFILE_NAME", currentProfile)
+
+            if (episodeList.isNotEmpty()) {
+                intent.putIntegerArrayListExtra("episode_list", episodeList)
+                intent.putIntegerArrayListExtra("episode_seasons", episodeSeasons)
+                intent.putStringArrayListExtra("episode_titles", episodeTitles)
+                intent.putStringArrayListExtra("episode_exts", episodeExts)
+            }
+            startActivity(intent)
+            finish()
+        }
     }
 
     private fun getMovieKey(id: Int) = "${currentProfile}_movie_resume_$id"
