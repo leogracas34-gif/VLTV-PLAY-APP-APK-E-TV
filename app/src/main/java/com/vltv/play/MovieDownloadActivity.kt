@@ -54,7 +54,7 @@ class MovieDownloadActivity : AppCompatActivity() {
     private lateinit var btnSecondary: Button
     private lateinit var btnVerDetalhes: Button
 
-    // ✅ NOVO: views do progresso de EXIBIÇÃO (assistido)
+    // Views do progresso de EXIBIÇÃO (quanto do filme já foi assistido).
     private lateinit var layoutWatchedProgress: LinearLayout
     private lateinit var pbMovieWatched: ProgressBar
     private lateinit var tvMovieWatchedInfo: TextView
@@ -101,7 +101,7 @@ class MovieDownloadActivity : AppCompatActivity() {
                 putExtra("name", movieName)
                 putExtra("icon", movieIcon)
                 putExtra("is_series", false)
-                putExtra("PROFILE_NAME", getSharedPreferences("vltv_prefs", MODE_PRIVATE).getString("last_profile_name", "Padrao"))
+                putExtra("PROFILE_NAME", perfilAtual())
             })
         }
     }
@@ -117,12 +117,23 @@ class MovieDownloadActivity : AppCompatActivity() {
         monitorJob?.cancel()
     }
 
-    // ✅ NOVO: verifica se existe posição de exibição salva (o quanto do
-    // filme o usuário já assistiu) e exibe a barra, igual à tela de
-    // Detalhes do Filme.
+    // ✅ NOVO: nome do perfil realmente ativo, lido do mesmo SharedPreferences
+    // usado pelo resto do app (SessionManager/ProfilesActivity). Antes essa
+    // tela usava "Padrao" fixo em alguns pontos, o que fazia a barra de
+    // "Assistido" não bater com a posição salva pelo PlayerActivity quando
+    // o usuário estava logado em outro perfil.
+    private fun perfilAtual(): String {
+        return getSharedPreferences("vltv_prefs", MODE_PRIVATE)
+            .getString("last_profile_name", "Padrao") ?: "Padrao"
+    }
+
+    // Verifica se existe posição de exibição salva (o quanto do filme o
+    // usuário já assistiu OFFLINE) e exibe a barra, igual à tela de
+    // Detalhes do Filme — só que lendo a chave gravada pelo PlayerActivity
+    // quando o filme é reproduzido em modo "vod_offline".
     private fun verificarProgressoAssistido() {
         val prefs   = getSharedPreferences("vltv_prefs", MODE_PRIVATE)
-        val profile = prefs.getString("last_profile_name", "Padrao") ?: "Padrao"
+        val profile = perfilAtual()
         val pos     = prefs.getLong("${profile}_movie_resume_${streamId}_pos", 0L)
         val total   = prefs.getLong("${profile}_movie_resume_${streamId}_dur", 0L)
 
@@ -132,7 +143,11 @@ class MovieDownloadActivity : AppCompatActivity() {
             val rest    = total - pos
             val hours   = TimeUnit.MILLISECONDS.toHours(rest)
             val minutes = TimeUnit.MILLISECONDS.toMinutes(rest) % 60
-            tvMovieWatchedInfo.text = "Restam ${hours}h${minutes}min para terminar"
+            tvMovieWatchedInfo.text = if (hours > 0) {
+                "Restam ${hours}h${minutes}min para terminar"
+            } else {
+                "Restam ${minutes}min para terminar"
+            }
         } else {
             layoutWatchedProgress.visibility = View.GONE
         }
@@ -238,6 +253,15 @@ class MovieDownloadActivity : AppCompatActivity() {
             DownloadDialogHelper.mostrarInfo(this, "Arquivo não encontrado", "Esse download parece estar corrompido. Remova-o e baixe novamente.")
             return
         }
+
+        val profile = perfilAtual()
+        // ✅ NOVO: lê a posição salva (mesma chave que o PlayerActivity
+        // grava em onPause/onStop/onDestroy) e passa como ponto de partida,
+        // pra "Assistir" retomar de onde o usuário parou em vez de sempre
+        // começar do zero.
+        val prefs = getSharedPreferences("vltv_prefs", MODE_PRIVATE)
+        val savedPos = prefs.getLong("${profile}_movie_resume_${item.stream_id}_pos", 0L)
+
         val intent = Intent(this, PlayerActivity::class.java).apply {
             putExtra("stream_id", item.stream_id)
             putExtra("stream_type", "vod_offline")
@@ -245,7 +269,13 @@ class MovieDownloadActivity : AppCompatActivity() {
             putExtra("offline_url", item.download_url)
             putExtra("channel_name", item.name)
             putExtra("icon", item.image_url)
-            putExtra("PROFILE_NAME", "Padrao")
+            // ✅ CORRIGIDO: antes ia sempre "Padrao" fixo aqui, quebrando a
+            // leitura/gravação da posição assistida quando o perfil ativo
+            // era outro. Agora usa o perfil real da sessão.
+            putExtra("PROFILE_NAME", profile)
+            if (savedPos > 0L) {
+                putExtra("start_position_ms", savedPos)
+            }
         }
         startActivity(intent)
     }
