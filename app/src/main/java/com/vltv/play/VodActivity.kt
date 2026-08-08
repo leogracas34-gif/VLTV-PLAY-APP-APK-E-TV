@@ -87,6 +87,13 @@ class VodActivity : AppCompatActivity() {
         else lista
     }
 
+    // ✅ NOVO: extrai o ano (19xx ou 20xx) embutido no nome do filme, ex:
+    // "Nome do Filme (2026)" → 2026. Usado para ordenar sempre do mais
+    // recente para o mais antigo. Filmes sem ano detectável vão pro final.
+    private fun extrairAnoFilme(nome: String): Int {
+        return Regex("\\b(19|20)\\d{2}\\b").find(nome)?.value?.toIntOrNull() ?: 0
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_vod)
@@ -603,17 +610,23 @@ class VodActivity : AppCompatActivity() {
 
         private val items = mutableListOf<VodStream>()
 
+        // ✅ NOVO: toda lista enviada pro adapter é ordenada do filme mais
+        // recente (ano maior) pro mais antigo, e o RecyclerView é reposicionado
+        // no topo — corrige tanto a ordem por ano quanto o bug de abrir a tela
+        // no meio/final da lista.
         fun submitList(newList: List<VodStream>) {
+            val listaOrdenada = newList.sortedByDescending { extrairAnoFilme(it.name) }
             val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
                 override fun getOldListSize() = items.size
-                override fun getNewListSize() = newList.size
-                override fun areItemsTheSame(o: Int, n: Int) = items[o].id == newList[n].id
+                override fun getNewListSize() = listaOrdenada.size
+                override fun areItemsTheSame(o: Int, n: Int) = items[o].id == listaOrdenada[n].id
                 override fun areContentsTheSame(o: Int, n: Int) =
-                    items[o].name == newList[n].name && items[o].icon == newList[n].icon
+                    items[o].name == listaOrdenada[n].name && items[o].icon == listaOrdenada[n].icon
             })
             items.clear()
-            items.addAll(newList)
+            items.addAll(listaOrdenada)
             diff.dispatchUpdatesTo(this)
+            rvMovies.scrollToPosition(0)
         }
 
         inner class VH(v: View) : RecyclerView.ViewHolder(v) {
