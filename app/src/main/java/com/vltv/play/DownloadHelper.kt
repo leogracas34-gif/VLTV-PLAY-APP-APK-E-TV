@@ -46,6 +46,22 @@ import kotlinx.coroutines.*
 // tela de Downloads (que observa LiveData do Room) "vazia" até então.
 // Agora a UI atualiza na hora, mostrando "Na fila de espera..." assim que
 // o usuário manda baixar.
+//
+// ✅ NOVO (correção da "seta que gira e volta sozinha"): iniciarDownload()
+// agora aceita um parâmetro opcional "aoIniciar" — um callback chamado na
+// Main thread, mas SÓ depois que a linha já foi gravada no Room com
+// garantia (insertDownload já terminou). Antes, as telas de Detalhes
+// (DetailsActivity/SeriesDetailsActivity) tentavam começar a monitorar o
+// progresso usando um Handler().postDelayed(500ms) "chutando" um tempo
+// que achavam suficiente pro insert terminar. Só que o insert roda numa
+// coroutine solta, competindo com outras operações de IO do app (Room,
+// pré-carregamento do catálogo, etc) — então, às vezes, o insert ainda
+// não tinha terminado quando a tela verificava o banco, encontrava
+// "null", desistia e voltava a seta pro estado "BAIXAR". O download
+// continuava rodando por trás (por isso ele aparecia certinho, alguns
+// segundos depois, na tela de Downloads — que reage via LiveData a
+// qualquer momento). Agora as telas só começam a monitorar quando esse
+// callback confirma que a linha já existe — sem adivinhação de tempo.
 // ────────────────────────────────────────────────────────────────
 @UnstableApi
 object DownloadHelper {
@@ -73,7 +89,11 @@ object DownloadHelper {
         // ✅ NOVO: nome do perfil que está iniciando esse download (ex:
         // "Perfil 1" ou "Infantil"). Fica gravado na linha do banco pra
         // cada tela de downloads (adulto/Kids) filtrar só o que é dela.
-        profileName: String = ""
+        profileName: String = "",
+        // ✅ NOVO: chamado na Main thread assim que a linha já está
+        // garantida no Room — é o sinal certo pra tela começar a
+        // monitorar o progresso, em vez de usar postDelayed "no chute".
+        aoIniciar: (() -> Unit)? = null
     ) {
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -113,6 +133,12 @@ object DownloadHelper {
                     profile_name = profileName
                 )
                 AppDatabase.getDatabase(context).streamDao().insertDownload(entity)
+
+                // ✅ NOVO: só agora, com o insert GARANTIDO, avisa quem
+                // chamou que já pode começar a monitorar o progresso.
+                withContext(Dispatchers.Main) {
+                    aoIniciar?.invoke()
+                }
 
                 val request = DownloadRequest.Builder(contentId, Uri.parse(url))
                     .setCustomCacheKey(contentId)
