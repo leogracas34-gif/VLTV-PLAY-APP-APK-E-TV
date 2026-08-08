@@ -919,30 +919,53 @@ class DetailsActivity : AppCompatActivity() {
         }
     }
 
+    // ✅ CORRIGIDO (bug da "seta que gira e volta sozinha"): antes, esse
+    // loop desistia na PRIMEIRA leitura em que o download não era
+    // encontrado no banco ("dl == null"), voltando o estado pra BAIXAR e
+    // cancelando o monitoramento de vez — mesmo que o download estivesse
+    // rodando normalmente por trás. Agora ele tolera algumas leituras
+    // nulas seguidas (o Room pode levar uma fração de segundo pra
+    // "assentar" o insert) antes de considerar que realmente não existe
+    // download em andamento.
     private fun iniciarMonitoramentoUI() {
         if (uiMonitorJob?.isActive == true) return
         uiMonitorJob = lifecycleScope.launch(Dispatchers.Main) {
             val db   = database.streamDao()
             val tipo = if (isSeries) "series" else "movie"
+            var tentativasNulas = 0
             while (isActive) {
                 val dl = withContext(Dispatchers.IO) { db.getDownloadByStreamId(streamId, tipo) }
-                downloadAtual = dl
                 if (dl != null) {
+                    tentativasNulas = 0
+                    downloadAtual = dl
                     val novoEstado = mapStatusParaEstado(dl.status, true)
                     downloadState = novoEstado
                     atualizarUI_download()
-                    if (novoEstado == DownloadState.BAIXADO || novoEstado == DownloadState.BAIXAR) cancel()
+                    if (novoEstado == DownloadState.BAIXADO || novoEstado == DownloadState.BAIXAR) {
+                        cancel()
+                    }
                 } else {
-                    downloadState = DownloadState.BAIXAR
-                    atualizarUI_download()
-                    cancel()
+                    tentativasNulas++
+                    if (tentativasNulas >= 5) {
+                        downloadAtual = null
+                        downloadState = DownloadState.BAIXAR
+                        atualizarUI_download()
+                        cancel()
+                    }
                 }
                 delay(1000)
             }
         }
     }
 
+    // ✅ CORRIGIDO: antes chamava iniciarMonitoramentoUI() via
+    // Handler().postDelayed(500ms), "adivinhando" que o insert no Room já
+    // tinha terminado. Agora usa o callback "aoIniciar" do DownloadHelper,
+    // que só dispara quando a linha já está garantida no banco — sem
+    // corrida, sem chute de tempo.
     private fun iniciarDownload() {
+        downloadState = DownloadState.NA_FILA
+        atualizarUI_download()
         DownloadHelper.iniciarDownload(
             context = this,
             streamId = streamId,
@@ -955,11 +978,11 @@ class DetailsActivity : AppCompatActivity() {
             // ✅ NOVO: grava qual perfil (adulto ou Kids) iniciou esse
             // download — é isso que DownloadsActivity/KidsDownloadsActivity
             // usam pra filtrar cada um mostrar só o que é seu.
-            profileName = currentProfile
+            profileName = currentProfile,
+            aoIniciar = {
+                iniciarMonitoramentoUI()
+            }
         )
-        downloadState = DownloadState.NA_FILA
-        atualizarUI_download()
-        Handler(Looper.getMainLooper()).postDelayed({ iniciarMonitoramentoUI() }, 500)
     }
 
     private fun atualizarUI_download() {
