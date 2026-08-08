@@ -1300,18 +1300,35 @@ class SeriesDetailsActivity : AppCompatActivity() {
             } else {
                 holder.btnDownloadItem.visibility = View.VISIBLE
                 jobsAtivos[position]?.cancel()
+                // ✅ CORRIGIDO (mesmo bug da "seta que volta sozinha", só
+                // que no download por episódio dentro da série): antes,
+                // se a primeira leitura do banco desse "null" (porque o
+                // insert do DownloadHelper ainda não tinha assentado), o
+                // "while" nem entrava e o ícone ficava preso no estado
+                // "BAIXAR" pra sempre — mesmo com o download rodando por
+                // trás. Agora o loop tolera algumas leituras nulas antes
+                // de desistir de fato.
                 jobsAtivos[position] = activity.lifecycleScope.launch(Dispatchers.IO) {
-                    val dl = activity.database.streamDao().getDownloadByStreamId(epId, "series")
-                    withContext(Dispatchers.Main) {
-                        aplicarEstadoDownload(holder, dl)
-                    }
-                    var atual = dl
-                    while (isActive && atual != null &&
-                        (atual.status == "BAIXANDO" || atual.status == "RUNNING" ||
-                         atual.status == "NA_FILA" || atual.status == "PAUSADO")) {
-                        kotlinx.coroutines.delay(1200)
-                        atual = activity.database.streamDao().getDownloadByStreamId(epId, "series")
-                        withContext(Dispatchers.Main) { aplicarEstadoDownload(holder, atual) }
+                    var dl = activity.database.streamDao().getDownloadByStreamId(epId, "series")
+                    withContext(Dispatchers.Main) { aplicarEstadoDownload(holder, dl) }
+                    var tentativasNulas = 0
+                    while (isActive) {
+                        val emProgresso = dl != null &&
+                            (dl.status == "BAIXANDO" || dl.status == "RUNNING" ||
+                             dl.status == "NA_FILA" || dl.status == "PAUSADO")
+                        if (emProgresso) {
+                            tentativasNulas = 0
+                            kotlinx.coroutines.delay(1200)
+                            dl = activity.database.streamDao().getDownloadByStreamId(epId, "series")
+                            withContext(Dispatchers.Main) { aplicarEstadoDownload(holder, dl) }
+                        } else if (dl == null && tentativasNulas < 4) {
+                            tentativasNulas++
+                            kotlinx.coroutines.delay(400)
+                            dl = activity.database.streamDao().getDownloadByStreamId(epId, "series")
+                            withContext(Dispatchers.Main) { aplicarEstadoDownload(holder, dl) }
+                        } else {
+                            break
+                        }
                     }
                 }
 
@@ -1321,6 +1338,14 @@ class SeriesDetailsActivity : AppCompatActivity() {
                         withContext(Dispatchers.Main) {
                             when {
                                 existente == null || existente.status == "ERRO" -> {
+                                    // ✅ Mostra "na fila" imediatamente na UI,
+                                    // e só confirma de vez (notifyItemChanged)
+                                    // quando o DownloadHelper garantir que a
+                                    // linha já está no Room — elimina a
+                                    // mesma corrida da tela de Detalhes.
+                                    holder.imgDownloadIcon.visibility = View.GONE
+                                    holder.pbDownload.visibility = View.VISIBLE
+                                    holder.pbDownload.isIndeterminate = true
                                     DownloadHelper.iniciarDownload(
                                         context = activity,
                                         streamId = epId,
@@ -1333,9 +1358,11 @@ class SeriesDetailsActivity : AppCompatActivity() {
                                         // ✅ NOVO: "profile" já é o perfil atual,
                                         // recebido no construtor do adapter
                                         // (mesmo currentProfile da Activity).
-                                        profileName = profile
+                                        profileName = profile,
+                                        aoIniciar = {
+                                            notifyItemChanged(position)
+                                        }
                                     )
-                                    notifyItemChanged(position)
                                 }
                                 existente.status == "PAUSADO" -> {
                                     activity.confirmarContinuarOuCancelarEpisodio(existente) { notifyItemChanged(position) }
